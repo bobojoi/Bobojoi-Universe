@@ -3,6 +3,13 @@ import { BubbleDog } from '../character/BubbleDog';
 import { BubbleGirl } from '../character/BubbleGirl';
 import { Player, type PlayerControls } from '../character/Player';
 import { COLORS, DEPTH, SCENE_KEYS } from '../constants/GameConstants';
+import {
+  createDefaultStudioQuestState,
+  StudioQuestManager,
+  type StudioInvestigationId,
+  type StudioQuestEvent,
+  type StudioQuestInteractionResult,
+} from '../quest/StudioQuestManager';
 import { DialogueSystem } from '../system/DialogueSystem';
 import { InteractionSystem } from '../system/InteractionSystem';
 import { SaveSystem } from '../system/SaveSystem';
@@ -16,6 +23,16 @@ const BUBBLE_GIRL_X = 960;
 const BUBBLE_GIRL_Y = 590;
 const BUBBLE_DOG_X = 520;
 const BUBBLE_DOG_Y = 460;
+const BUBBLE_DOG_RUN_X = 340;
+const BUBBLE_DOG_RUN_Y = 350;
+const PROP_BOX_X = 720;
+const PROP_BOX_Y = 980;
+const BUBBLE_TABLE_X = 1260;
+const BUBBLE_TABLE_Y = 760;
+const DOG_MAT_X = BUBBLE_DOG_X;
+const DOG_MAT_Y = BUBBLE_DOG_Y + 44;
+const STAR_RING_X = DOG_MAT_X + 70;
+const STAR_RING_Y = DOG_MAT_Y + 26;
 const CAMERA_LERP = 0.09;
 const CAMERA_ZOOM = 1;
 const CAMERA_DEADZONE_WIDTH = 160;
@@ -29,6 +46,12 @@ const BUBBLE_MAX_ALPHA = 0.22;
 const BUBBLE_FLOAT_DISTANCE = 18;
 const BUBBLE_FLOAT_DURATION_MS = 1800;
 const AUTO_SAVE_INTERVAL_MS = 5000;
+const PROP_WIDTH = 150;
+const PROP_HEIGHT = 82;
+const PROP_LABEL_OFFSET_Y = 58;
+const STAR_RING_RADIUS = 28;
+const STAR_RING_PULSE_SCALE = 1.12;
+const STAR_RING_PULSE_DURATION_MS = 720;
 
 /** First explorable room and composition root for gameplay systems. */
 export class StudioScene extends Phaser.Scene {
@@ -37,7 +60,10 @@ export class StudioScene extends Phaser.Scene {
   private interactionSystem!: InteractionSystem;
   private dialogueSystem!: DialogueSystem;
   private saveSystem!: SaveSystem;
+  private questManager!: StudioQuestManager;
   private hud!: HUD;
+  private bubbleDog!: BubbleDog;
+  private starRing!: Phaser.GameObjects.Container;
   private autoSaveTimer!: Phaser.Time.TimerEvent;
 
   public constructor() {
@@ -48,8 +74,15 @@ export class StudioScene extends Phaser.Scene {
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.drawStudio();
 
+    this.saveSystem = new SaveSystem();
+    const savedData = this.saveSystem.load();
+    this.questManager = new StudioQuestManager(
+      savedData?.studioQuest ?? createDefaultStudioQuestState(),
+      () => this.handleQuestStateChanged(),
+    );
+
     const controls = this.createControls();
-    const savedPosition = new SaveSystem().load()?.player;
+    const savedPosition = savedData?.player;
     this.player = new Player(
       this,
       savedPosition?.x ?? PLAYER_START_X,
@@ -58,21 +91,42 @@ export class StudioScene extends Phaser.Scene {
     );
 
     const bubbleGirl = new BubbleGirl(this, BUBBLE_GIRL_X, BUBBLE_GIRL_Y);
-    const bubbleDog = new BubbleDog(this, BUBBLE_DOG_X, BUBBLE_DOG_Y);
+    const dogWasMoved = this.questManager.getState().investigated['dog-mat'];
+    this.bubbleDog = new BubbleDog(
+      this,
+      dogWasMoved ? BUBBLE_DOG_RUN_X : BUBBLE_DOG_X,
+      dogWasMoved ? BUBBLE_DOG_RUN_Y : BUBBLE_DOG_Y,
+    );
+    const investigationTargets = this.createInvestigationTargets();
+    this.starRing = this.createStarRing();
+    this.starRing.setVisible(this.questManager.isRingVisible());
 
     this.dialogueSystem = new DialogueSystem(this);
     this.hud = new HUD(this);
-    this.saveSystem = new SaveSystem();
+    this.refreshQuestHud();
     this.interactionSystem = new InteractionSystem(this.player);
     this.interactionSystem.register({
       target: bubbleGirl,
       prompt: '和泡妞說話',
-      message: '泡妞：今天開始努力吧！',
+      onInteract: () => this.handleQuestInteraction(this.questManager.interactWithBubbleGirl()),
     });
     this.interactionSystem.register({
-      target: bubbleDog,
+      target: this.bubbleDog,
       prompt: '看看泡彈',
-      message: '泡彈看起來很開心。',
+      onInteract: () => this.dialogueSystem.show('泡彈看起來很開心。'),
+    });
+    this.registerInvestigationTarget(investigationTargets.propBox, 'prop-box', '調查道具箱');
+    this.registerInvestigationTarget(
+      investigationTargets.bubbleTable,
+      'bubble-table',
+      '調查泡泡水工作桌',
+    );
+    this.registerInvestigationTarget(investigationTargets.dogMat, 'dog-mat', '調查泡彈休息墊');
+    this.interactionSystem.register({
+      target: this.starRing,
+      prompt: '拿起星光泡泡環',
+      isEnabled: () => this.questManager.isRingVisible(),
+      onInteract: () => this.handleQuestInteraction(this.questManager.collectRing()),
     });
 
     this.configureCamera();
@@ -91,11 +145,154 @@ export class StudioScene extends Phaser.Scene {
     this.player.updateMovement();
 
     const interaction = this.interactionSystem.getNearest();
-    this.hud.setInteractionPrompt(interaction?.prompt);
+    this.hud.setInteractionPrompt(
+      interaction ? this.interactionSystem.getPrompt(interaction) : undefined,
+    );
 
     if (interaction && Phaser.Input.Keyboard.JustDown(this.interactionKey)) {
-      this.dialogueSystem.show(interaction.message);
+      interaction.onInteract();
     }
+  }
+
+  /** Creates the three investigation props in the established studio visual language. */
+  private createInvestigationTargets(): Record<
+    'propBox' | 'bubbleTable' | 'dogMat',
+    Phaser.GameObjects.Container
+  > {
+    const propBox = this.createLabeledProp(PROP_BOX_X, PROP_BOX_Y, '道具箱', COLORS.PINK);
+    const bubbleTable = this.createLabeledProp(
+      BUBBLE_TABLE_X,
+      BUBBLE_TABLE_Y,
+      '泡泡水工作桌',
+      COLORS.MINT,
+    );
+
+    const matShape = this.add
+      .ellipse(0, 0, PROP_WIDTH, PROP_HEIGHT, COLORS.PINK, 0.2)
+      .setStrokeStyle(3, COLORS.PINK, 0.7);
+    const matLabel = this.add
+      .text(0, PROP_LABEL_OFFSET_Y, '泡彈休息墊', {
+        color: '#ffb2d5',
+        fontFamily: 'Noto Sans TC, PingFang TC, sans-serif',
+        fontSize: '17px',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5);
+    const dogMat = this.add
+      .container(DOG_MAT_X, DOG_MAT_Y, [matShape, matLabel])
+      .setDepth(DEPTH.WORLD_DECORATION);
+
+    return { propBox, bubbleTable, dogMat };
+  }
+
+  /** Builds one readable placeholder prop without introducing texture dependencies. */
+  private createLabeledProp(
+    x: number,
+    y: number,
+    label: string,
+    color: number,
+  ): Phaser.GameObjects.Container {
+    const shape = this.add
+      .rectangle(0, 0, PROP_WIDTH, PROP_HEIGHT, COLORS.PANEL, 0.9)
+      .setStrokeStyle(3, color, 0.8);
+    const accent = this.add.rectangle(
+      0,
+      -PROP_HEIGHT / 2 + 12,
+      PROP_WIDTH - 22,
+      6,
+      color,
+      0.8,
+    );
+    const labelText = this.add
+      .text(0, 2, label, {
+        color: '#f8f5ff',
+        fontFamily: 'Noto Sans TC, PingFang TC, sans-serif',
+        fontSize: '17px',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5);
+
+    return this.add
+      .container(x, y, [shape, accent, labelText])
+      .setDepth(DEPTH.WORLD_DECORATION);
+  }
+
+  /** Creates the quest pickup as the studio's single high-emphasis visual signature. */
+  private createStarRing(): Phaser.GameObjects.Container {
+    const glow = this.add
+      .circle(0, 0, STAR_RING_RADIUS + 10, COLORS.GOLD, 0.14)
+      .setStrokeStyle(2, COLORS.MINT, 0.35);
+    const ring = this.add
+      .circle(0, 0, STAR_RING_RADIUS, COLORS.GOLD, 0.08)
+      .setStrokeStyle(7, COLORS.GOLD, 1);
+    const star = this.add
+      .text(0, 0, '✦', {
+        color: '#f8f5ff',
+        fontFamily: 'serif',
+        fontSize: '28px',
+      })
+      .setOrigin(0.5);
+    const container = this.add
+      .container(STAR_RING_X, STAR_RING_Y, [glow, ring, star])
+      .setDepth(DEPTH.CHARACTER + 1);
+
+    this.tweens.add({
+      targets: container,
+      scale: STAR_RING_PULSE_SCALE,
+      duration: STAR_RING_PULSE_DURATION_MS,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.inOut',
+    });
+    return container;
+  }
+
+  /** Connects a scene target to one quest investigation action. */
+  private registerInvestigationTarget(
+    target: Phaser.GameObjects.Container,
+    location: StudioInvestigationId,
+    prompt: string,
+  ): void {
+    this.interactionSystem.register({
+      target,
+      prompt,
+      onInteract: () => this.handleQuestInteraction(this.questManager.investigate(location)),
+    });
+  }
+
+  /** Presents quest feedback and maps state-machine events into world changes. */
+  private handleQuestInteraction(result: StudioQuestInteractionResult): void {
+    this.dialogueSystem.show(result.message);
+    for (const event of result.events ?? []) this.handleQuestEvent(event);
+  }
+
+  /** Keeps one-way world effects out of the quest manager. */
+  private handleQuestEvent(event: StudioQuestEvent): void {
+    switch (event) {
+      case 'dog-runs':
+        this.bubbleDog.runTo(BUBBLE_DOG_RUN_X, BUBBLE_DOG_RUN_Y);
+        break;
+      case 'ring-revealed':
+        this.starRing.setVisible(true);
+        break;
+      case 'ring-collected':
+        this.starRing.setVisible(false);
+        break;
+      case 'completed':
+        this.hud.showQuestCompleted();
+        break;
+    }
+  }
+
+  /** Refreshes derived HUD content and persists every meaningful quest transition. */
+  private handleQuestStateChanged(): void {
+    this.refreshQuestHud();
+    this.saveProgress();
+  }
+
+  /** Applies the manager's derived quest view without duplicating quest rules. */
+  private refreshQuestHud(): void {
+    this.hud.setQuest(this.questManager.getHudView());
   }
 
   /** Creates keyboard controls in one place for later remapping support. */
@@ -177,7 +374,10 @@ export class StudioScene extends Phaser.Scene {
 
   /** Captures player position without blocking the render loop. */
   private saveProgress(): void {
-    this.saveSystem.save({ x: this.player.x, y: this.player.y });
+    this.saveSystem.save(
+      { x: this.player.x, y: this.player.y },
+      this.questManager.getState(),
+    );
   }
 
   /** Persists progress and releases scene-owned resources. */

@@ -1,6 +1,6 @@
 # Bobojoi Universe
 
-以 Phaser 3、TypeScript 與 Vite 建立的可持續擴充遊戲專案。目前版本提供泡泡工作室場景、WASD 移動、鏡頭跟隨、角色互動，以及版本化的本機存檔基礎。
+以 Phaser 3、TypeScript 與 Vite 建立的可持續擴充遊戲專案。目前版本提供泡泡工作室場景、WASD 移動、鏡頭跟隨、角色互動、「尋找星光泡泡環」新手任務，以及版本化的本機存檔基礎。
 
 ## 開始使用
 
@@ -24,6 +24,7 @@ npm run build
 
 - `src/scene/`：生命週期與世界組裝。
 - `src/character/`：角色行為與物理。
+- `src/quest/`：任務狀態、規則與可保存的進度資料。
 - `src/system/`：可跨場景重用的對話、互動及存檔邏輯。
 - `src/ui/`：固定於鏡頭的介面。
 - `src/config/`、`src/constants/`：全域設定與穩定識別值。

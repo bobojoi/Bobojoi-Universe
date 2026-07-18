@@ -5,8 +5,9 @@ const DEFAULT_INTERACTION_DISTANCE = 132;
 /** Data contract for any object that can respond to player interaction. */
 export interface Interactable {
   target: Phaser.GameObjects.Components.Transform;
-  prompt: string;
-  message: string;
+  prompt: string | (() => string);
+  onInteract: () => void;
+  isEnabled?: () => boolean;
 }
 
 /** Locates the nearest valid interaction and executes it on demand. */
@@ -29,6 +30,8 @@ export class InteractionSystem {
     let nearestDistance = this.interactionDistance;
 
     for (const interactable of this.interactables) {
+      if (interactable.isEnabled && !interactable.isEnabled()) continue;
+
       const distance = Phaser.Math.Distance.Between(
         this.player.x,
         this.player.y,
@@ -43,5 +46,10 @@ export class InteractionSystem {
     }
 
     return nearest;
+  }
+
+  /** Resolves dynamic prompt copy only for the active nearby target. */
+  public getPrompt(interactable: Interactable): string {
+    return typeof interactable.prompt === 'function' ? interactable.prompt() : interactable.prompt;
   }
 }
