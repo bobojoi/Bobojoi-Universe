@@ -74,7 +74,7 @@ describe('migrateSaveData', () => {
     expect(migrated?.studioQuest.stage).toBe(expectedStage);
   });
 
-  it('migrates a completed v2 save through the current v4 story defaults', () => {
+  it('migrates a completed v2 save through the current story defaults', () => {
     const migrated = migrateSaveData(
       createSave(2, {
         studioQuest: { stage: 'completed', completed: true, ringCollected: true },
@@ -82,7 +82,7 @@ describe('migrateSaveData', () => {
       TEST_TIMESTAMP,
     );
     expect(migrated).toMatchObject({
-      version: 4,
+      version: SAVE_VERSION,
       mainStoryStage: 'first-offer',
       playerStats: { technique: 10, popularity: 0, conviction: 10, energy: 100 },
       relationships: { bubbleGirlTrust: 0 },
@@ -109,7 +109,7 @@ describe('migrateSaveData', () => {
       TEST_TIMESTAMP,
     );
     expect(migrated).toMatchObject({
-      version: 4,
+      version: SAVE_VERSION,
       mainStoryStage: 'first-offer',
       playerStats: { technique: 10, popularity: 0, conviction: 10, energy: 100 },
       relationships: { bubbleGirlTrust: 0 },
@@ -139,6 +139,81 @@ describe('migrateSaveData', () => {
       choseTrainingFirst: false,
       negotiatedSmallShow: false,
       firstOfferResolved: true,
+    });
+    expect(migrated).toMatchObject({
+      version: SAVE_VERSION,
+      chapterOneNode: 'a-preparation',
+    });
+  });
+
+  it.each([
+    ['preparing-show', { acceptedFirstOffer: true, firstOfferResolved: true }, 'a-preparation'],
+    ['training-first', { choseTrainingFirst: true, firstOfferResolved: true }, 'b-training'],
+    ['small-show', { negotiatedSmallShow: true, firstOfferResolved: true }, 'c-format'],
+  ] as const)('migrates a v4 %s route to its opening node', (stage, storyFlags, node) => {
+    const migrated = migrateSaveData(
+      createSave(4, {
+        studioQuest: { stage: 'completed', investigated: {} },
+        mainStoryStage: stage,
+        storyFlags,
+      }),
+      TEST_TIMESTAMP,
+    );
+    expect(migrated).toMatchObject({ version: SAVE_VERSION, mainStoryStage: stage, chapterOneNode: node });
+  });
+
+  it('repairs an abnormal v4 completed chapter with a safe typed outcome', () => {
+    const migrated = migrateSaveData(
+      createSave(4, {
+        studioQuest: { stage: 'completed', investigated: {} },
+        mainStoryStage: 'chapter-one-complete',
+        storyFlags: { acceptedFirstOffer: true, firstOfferResolved: true },
+      }),
+      TEST_TIMESTAMP,
+    );
+    expect(migrated).toMatchObject({
+      version: SAVE_VERSION,
+      mainStoryStage: 'chapter-one-complete',
+      chapterOneNode: 'complete',
+      chapterOneOutcome: 'legacy-complete',
+    });
+  });
+
+  it('repairs a route-less v4 completed chapter to the deterministic fallback route', () => {
+    const migrated = migrateSaveData(
+      createSave(4, {
+        studioQuest: { stage: 'completed', investigated: {} },
+        mainStoryStage: 'chapter-one-complete',
+        storyFlags: { firstOfferResolved: true },
+      }),
+      TEST_TIMESTAMP,
+    );
+    expect(migrated).toMatchObject({
+      mainStoryStage: 'chapter-one-complete',
+      storyFlags: { acceptedFirstOffer: true, firstOfferResolved: true },
+      chapterOneNode: 'complete',
+      chapterOneOutcome: 'legacy-complete',
+    });
+  });
+
+  it('normalizes damaged v5 chapter flags and preserves a valid confirmed node', () => {
+    const migrated = migrateSaveData(
+      createSave(5, {
+        studioQuest: { stage: 'completed', investigated: {} },
+        mainStoryStage: 'small-show',
+        storyFlags: { negotiatedSmallShow: true, firstOfferResolved: true },
+        chapterOneNode: 'c-space',
+        chapterOneFlags: { smallShowVisual: true, smallShowStory: true, trainedBasics: true },
+      }),
+      TEST_TIMESTAMP,
+    );
+    expect(migrated).toMatchObject({
+      chapterOneNode: 'c-space',
+      chapterOneFlags: {
+        smallShowVisual: true,
+        smallShowStory: false,
+        trainedBasics: false,
+      },
     });
   });
 

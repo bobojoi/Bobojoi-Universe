@@ -13,7 +13,7 @@ import { StudioQuestWorldController } from '../quest/StudioQuestWorldController'
 import {
   createDefaultMainStoryState,
   MainStoryManager,
-  type FirstOfferChoiceId,
+  type StoryChoiceId,
   type StoryInteraction,
 } from '../story/MainStoryManager';
 import { DialogueSystem } from '../system/DialogueSystem';
@@ -93,6 +93,9 @@ export class StudioScene extends Phaser.Scene {
           playerStats: savedData.playerStats,
           relationships: savedData.relationships,
           storyFlags: savedData.storyFlags,
+          chapterOneNode: savedData.chapterOneNode,
+          chapterOneOutcome: savedData.chapterOneOutcome,
+          chapterOneFlags: savedData.chapterOneFlags,
         }
       : createDefaultMainStoryState(this.questManager.isCompleted());
     this.storyManager = new MainStoryManager(
@@ -316,12 +319,13 @@ export class StudioScene extends Phaser.Scene {
       return;
     }
 
-    this.dialogueSystem.showChoices<FirstOfferChoiceId>(
+    this.dialogueSystem.showChoices<StoryChoiceId>(
       { speaker: interaction.speaker, text: interaction.text },
       interaction.choices,
       (choiceId) => {
-        const result = this.storyManager.resolveFirstOffer(choiceId);
+        const result = this.storyManager.resolveStoryChoice(choiceId);
         this.dialogueSystem.show(`${result.speaker}：${result.text}`);
+        if (result.chapterCompleted) this.hud.showChapterCompleted();
       },
     );
   }
@@ -342,6 +346,7 @@ export class StudioScene extends Phaser.Scene {
   private refreshPlayerProgressHud(): void {
     const state = this.storyManager.getState();
     this.hud.setPlayerProgress(state.playerStats, state.relationships);
+    this.hud.setMainStory(this.storyManager.getHudView());
   }
 
   /** Creates keyboard controls in one place for later remapping support. */

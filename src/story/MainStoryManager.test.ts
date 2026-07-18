@@ -108,12 +108,48 @@ describe('MainStoryManager first-offer effects', () => {
     expect(new Set(stages).size).toBe(3);
   });
 
-  it('uses trust in a later pure dialogue condition', () => {
+  it('uses trust in a later pure choice condition', () => {
     const { manager } = createManager();
     manager.resolveFirstOffer('train-first');
+    const interaction = manager.interactWithBubbleGirl();
+    expect(interaction?.kind).toBe('choices');
+    if (interaction?.kind === 'choices') {
+      expect(interaction.choices).toHaveLength(3);
+      expect(interaction.text).toContain('練習');
+    }
+  });
+
+  it('commits a route choice atomically and updates its persisted node', () => {
+    const { manager, onChanged } = createManager();
+    manager.resolveFirstOffer('small-show');
+    const result = manager.resolveStoryChoice('c-interactive-format');
+    expect(result.success).toBe(true);
+    expect(manager.getState()).toMatchObject({
+      mainStoryStage: 'small-show',
+      chapterOneNode: 'c-space',
+      chapterOneFlags: { smallShowInteractive: true },
+      playerStats: { popularity: 11, energy: 85 },
+      relationships: { bubbleGirlTrust: 14 },
+    });
+    expect(onChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it('completes a route once and returns route-specific post-chapter dialogue', () => {
+    const { manager, onChanged } = createManager();
+    manager.resolveFirstOffer('small-show');
+    manager.resolveStoryChoice('c-story-format');
+    const completed = manager.resolveStoryChoice('c-request-space-change');
+    expect(completed).toMatchObject({ success: true, chapterCompleted: true });
+    expect(manager.getState()).toMatchObject({
+      mainStoryStage: 'chapter-one-complete',
+      chapterOneNode: 'complete',
+      chapterOneOutcome: 'small-show-story-success',
+    });
+    expect(manager.resolveStoryChoice('c-adapt-safely').success).toBe(false);
     expect(manager.interactWithBubbleGirl()).toMatchObject({
       kind: 'message',
-      text: expect.stringContaining('我很放心'),
+      text: expect.stringContaining('下一段旅程尚未開放'),
     });
+    expect(onChanged).toHaveBeenCalledTimes(3);
   });
 });

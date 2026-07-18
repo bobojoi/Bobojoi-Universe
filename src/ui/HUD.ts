@@ -3,6 +3,7 @@ import { GAME_WIDTH } from '../config/gameConfig';
 import { COLORS, DEPTH } from '../constants/GameConstants';
 import type { StudioQuestHudView } from '../quest/StudioQuestManager';
 import type { PlayerStatsState, RelationshipState } from '../story/PlayerProgress';
+import type { MainStoryHudView } from '../story/MainStoryManager';
 
 const TITLE_X = 32;
 const TITLE_Y = 28;
@@ -24,6 +25,10 @@ const STATUS_WIDTH = 226;
 const STATUS_HEIGHT = 118;
 const STATUS_PADDING = 16;
 const STATUS_RADIUS = 14;
+const STORY_X = QUEST_X;
+const STORY_Y = QUEST_Y + QUEST_HEIGHT + 12;
+const STORY_HEIGHT = 82;
+const CHAPTER_BANNER_Y = COMPLETE_BANNER_Y + 58;
 
 /** Displays fixed player guidance independently of world-camera movement. */
 export class HUD {
@@ -33,6 +38,9 @@ export class HUD {
   private readonly questTitle: Phaser.GameObjects.Text;
   private readonly questObjective: Phaser.GameObjects.Text;
   private readonly statusValues: Phaser.GameObjects.Text;
+  private readonly storyBackground: Phaser.GameObjects.Graphics;
+  private readonly storyTitle: Phaser.GameObjects.Text;
+  private readonly storyObjective: Phaser.GameObjects.Text;
 
   public constructor(scene: Phaser.Scene) {
     scene.add
@@ -88,6 +96,27 @@ export class HUD {
       .setScrollFactor(0)
       .setDepth(DEPTH.UI + 1);
 
+    this.storyBackground = scene.add.graphics().setScrollFactor(0).setDepth(DEPTH.UI);
+    this.storyTitle = scene.add
+      .text(STORY_X + QUEST_PADDING, STORY_Y + 13, '', {
+        color: '#78f0cf',
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '12px',
+        fontStyle: 'bold',
+        letterSpacing: 2,
+      })
+      .setScrollFactor(0)
+      .setDepth(DEPTH.UI + 1);
+    this.storyObjective = scene.add
+      .text(STORY_X + QUEST_PADDING, STORY_Y + 38, '', {
+        color: '#f8f5ff',
+        fontFamily: 'Noto Sans TC, PingFang TC, sans-serif',
+        fontSize: '15px',
+        wordWrap: { width: QUEST_WIDTH - QUEST_PADDING * 2 },
+      })
+      .setScrollFactor(0)
+      .setDepth(DEPTH.UI + 1);
+
     const statusBackground = scene.add.graphics().setScrollFactor(0).setDepth(DEPTH.UI);
     statusBackground.fillStyle(COLORS.PANEL, 0.88);
     statusBackground.fillRoundedRect(
@@ -127,6 +156,7 @@ export class HUD {
 
     this.setInteractionPrompt();
     this.setQuest();
+    this.setMainStory();
   }
 
   /** Updates the compact cast card immediately after a story effect. */
@@ -172,6 +202,33 @@ export class HUD {
     this.questObjective.setText(view.objective);
   }
 
+  /** Shows current chapter progress without duplicating story-stage rules in the UI. */
+  public setMainStory(view?: MainStoryHudView): void {
+    this.storyBackground.clear();
+    this.storyTitle.setVisible(Boolean(view));
+    this.storyObjective.setVisible(Boolean(view));
+    if (!view) return;
+
+    this.storyBackground.fillStyle(COLORS.PANEL, 0.92);
+    this.storyBackground.fillRoundedRect(
+      STORY_X,
+      STORY_Y,
+      QUEST_WIDTH,
+      STORY_HEIGHT,
+      QUEST_RADIUS,
+    );
+    this.storyBackground.lineStyle(2, view.completed ? COLORS.GOLD : COLORS.MINT, 0.65);
+    this.storyBackground.strokeRoundedRect(
+      STORY_X,
+      STORY_Y,
+      QUEST_WIDTH,
+      STORY_HEIGHT,
+      QUEST_RADIUS,
+    );
+    this.storyTitle.setText(view.completed ? 'CHAPTER COMPLETE' : view.title);
+    this.storyObjective.setText(view.objective);
+  }
+
   /** Celebrates completion once without leaving an event listener behind. */
   public showQuestCompleted(): void {
     const banner = this.questObjective.scene.add
@@ -191,6 +248,31 @@ export class HUD {
       targets: banner,
       alpha: 0,
       y: COMPLETE_BANNER_Y - 12,
+      delay: COMPLETE_BANNER_DURATION_MS,
+      duration: 350,
+      onComplete: () => banner.destroy(),
+    });
+  }
+
+  /** Celebrates chapter completion once at the transition, never during state restore. */
+  public showChapterCompleted(): void {
+    const banner = this.storyObjective.scene.add
+      .text(GAME_WIDTH / 2, CHAPTER_BANNER_Y, '第一章完成  ✦  夢想的第一步', {
+        color: '#15172c',
+        backgroundColor: '#78f0cf',
+        fontFamily: 'Noto Sans TC, PingFang TC, sans-serif',
+        fontSize: '20px',
+        fontStyle: 'bold',
+        padding: { x: 24, y: 12 },
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(DEPTH.DIALOGUE + 2);
+
+    this.storyObjective.scene.tweens.add({
+      targets: banner,
+      alpha: 0,
+      y: CHAPTER_BANNER_Y - 12,
       delay: COMPLETE_BANNER_DURATION_MS,
       duration: 350,
       onComplete: () => banner.destroy(),
