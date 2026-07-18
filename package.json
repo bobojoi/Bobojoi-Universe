@@ -1,0 +1,23 @@
+{
+  "name": "bobojoi-universe",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A scalable Phaser 3 game foundation for Bobojoi Universe.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "phaser": "^3.90.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  }
+}

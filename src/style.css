@@ -1,0 +1,28 @@
+:root {
+  color-scheme: dark;
+  font-family: "Noto Sans TC", "PingFang TC", system-ui, sans-serif;
+  background: #080a1c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#game {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  /* Keep the page quiet so the canvas remains the single visual focus. */
+  background: radial-gradient(circle at 50% 40%, #242858 0%, #080a1c 68%);
+}
+
+canvas {
+  display: block;
+  margin: 0 auto;
+}
