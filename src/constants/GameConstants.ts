@@ -2,6 +2,7 @@
 export const SCENE_KEYS = {
   BOOT: 'BootScene',
   PRELOAD: 'PreloadScene',
+  TITLE: 'TitleScene',
   STUDIO: 'StudioScene',
 } as const;
 

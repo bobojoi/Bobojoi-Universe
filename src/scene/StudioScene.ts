@@ -4,6 +4,9 @@ import { BubbleGirl } from '../character/BubbleGirl';
 import { Player, type PlayerControls } from '../character/Player';
 import { COLORS, DEPTH, SCENE_KEYS } from '../constants/GameConstants';
 import {
+  getProgressPresentation,
+} from '../presentation/ProgressPresentation';
+import {
   createDefaultStudioQuestState,
   StudioQuestManager,
   type StudioInvestigationId,
@@ -19,6 +22,11 @@ import {
 import { DialogueSystem } from '../system/DialogueSystem';
 import { InteractionSystem } from '../system/InteractionSystem';
 import { SaveSystem } from '../system/SaveSystem';
+import { StudioGuidanceController } from '../tutorial/StudioGuidanceController';
+import {
+  createDefaultTutorialProgress,
+  type TutorialProgressState,
+} from '../tutorial/TutorialProgress';
 import { HUD } from '../ui/HUD';
 
 const WORLD_WIDTH = 2200;
@@ -62,6 +70,7 @@ export class StudioScene extends Phaser.Scene {
   private player!: Player;
   private interactionKey!: Phaser.Input.Keyboard.Key;
   private restartKey?: Phaser.Input.Keyboard.Key;
+  private escapeKey!: Phaser.Input.Keyboard.Key;
   private interactionSystem!: InteractionSystem;
   private dialogueSystem!: DialogueSystem;
   private saveSystem!: SaveSystem;
@@ -72,6 +81,9 @@ export class StudioScene extends Phaser.Scene {
   private bubbleDog!: BubbleDog;
   private starRing!: Phaser.GameObjects.Container;
   private autoSaveTimer!: Phaser.Time.TimerEvent;
+  private guidanceController!: StudioGuidanceController;
+  private tutorialProgress!: TutorialProgressState;
+  private lastSaveSucceeded = true;
 
   public constructor() {
     super(SCENE_KEYS.STUDIO);
@@ -83,6 +95,7 @@ export class StudioScene extends Phaser.Scene {
 
     this.saveSystem = new SaveSystem();
     const savedData = this.saveSystem.load();
+    this.tutorialProgress = savedData?.tutorialProgress ?? createDefaultTutorialProgress();
     this.questManager = new StudioQuestManager(
       savedData?.studioQuest ?? createDefaultStudioQuestState(),
       () => this.handleQuestStateChanged(),
@@ -123,6 +136,17 @@ export class StudioScene extends Phaser.Scene {
 
     this.dialogueSystem = new DialogueSystem(this);
     this.hud = new HUD(this);
+    this.guidanceController = new StudioGuidanceController(
+      this,
+      this.tutorialProgress,
+      () => this.questManager.getState(),
+      () => this.storyManager.getState(),
+      (state) => {
+        this.tutorialProgress = state;
+        return this.saveProgress();
+      },
+      () => this.dialogueSystem.close(),
+    );
     this.refreshPlayerProgressHud();
     this.questWorldController = new StudioQuestWorldController(this.questManager, {
       bubbleDog: this.bubbleDog,
@@ -164,6 +188,9 @@ export class StudioScene extends Phaser.Scene {
       callbackScope: this,
     });
 
+    // The persisted flag is marked before display so reload/restart cannot replay onboarding.
+    this.time.delayedCall(180, () => this.guidanceController.start());
+
     // Scene shutdown can occur during future transitions or hot reloads.
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.shutdown, this);
   }
@@ -175,10 +202,23 @@ export class StudioScene extends Phaser.Scene {
       return;
     }
 
+    if (this.guidanceController.isBlockingInput()) {
+      this.player.updateMovement(false);
+      this.hud.setInteractionPrompt();
+      this.guidanceController.update();
+      return;
+    }
+
     if (this.dialogueSystem.isChoosing()) {
       this.player.updateMovement(false);
       this.hud.setInteractionPrompt();
       this.dialogueSystem.update();
+      return;
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(this.escapeKey)) {
+      this.saveProgress();
+      this.scene.start(SCENE_KEYS.TITLE);
       return;
     }
 
@@ -322,36 +362,56 @@ export class StudioScene extends Phaser.Scene {
       return;
     }
 
-    this.dialogueSystem.showChoices<StoryChoiceId>(
-      { speaker: interaction.speaker, text: interaction.text },
-      interaction.choices,
-      (choiceId) => {
-        const result = this.storyManager.resolveStoryChoice(choiceId);
-        this.dialogueSystem.show(`${result.speaker}：${result.text}`);
-        if (result.chapterCompleted && result.completionLabel) {
-          this.hud.showChapterCompleted(result.completionLabel);
-        }
-      },
-    );
+    const showChoices = (): void => {
+      this.dialogueSystem.showChoices<StoryChoiceId>(
+        { speaker: interaction.speaker, text: interaction.text },
+        interaction.choices,
+        (choiceId) => this.resolveStoryChoice(choiceId),
+      );
+    };
+
+    this.guidanceController.presentChoiceExplanation(interaction.choices, showChoices);
+  }
+
+  /** Resolves once, then presents only the already-committed effects and save result. */
+  private resolveStoryChoice(choiceId: StoryChoiceId): void {
+    const result = this.storyManager.resolveStoryChoice(choiceId);
+    this.dialogueSystem.show(`${result.speaker}：${result.text}`);
+    if (!result.success) return;
+
+    this.guidanceController.presentChoiceResult(result, this.lastSaveSucceeded);
+    if (result.chapterCompleted && result.completionLabel) {
+      this.hud.showChapterCompleted(result.completionLabel);
+    }
   }
 
   /** Refreshes derived HUD content and persists every meaningful quest transition. */
   private handleQuestStateChanged(): void {
     this.questWorldController.refreshHud();
     this.saveProgress();
+    this.refreshProgressPresentation();
+    this.guidanceController.schedulePendingChapterTransitions();
   }
 
   /** Updates character values and saves one complete story transition. */
   private handleStoryStateChanged(): void {
     this.refreshPlayerProgressHud();
     this.saveProgress();
+    this.guidanceController.schedulePendingChapterTransitions();
   }
 
   /** Maps the story manager snapshot into the compact character-status HUD. */
   private refreshPlayerProgressHud(): void {
     const state = this.storyManager.getState();
     this.hud.setPlayerProgress(state.playerStats, state.relationships);
-    this.hud.setMainStory(this.storyManager.getHudView());
+    this.refreshProgressPresentation();
+  }
+
+  /** Maps quest and story truth into one human-readable chapter/objective card. */
+  private refreshProgressPresentation(): void {
+    this.hud.setProgress(
+      getProgressPresentation(this.questManager.getState(), this.storyManager.getState()),
+    );
   }
 
   /** Creates keyboard controls in one place for later remapping support. */
@@ -362,6 +422,7 @@ export class StudioScene extends Phaser.Scene {
     }
 
     this.interactionKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
+    this.escapeKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
     if (import.meta.env.DEV) {
       this.restartKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
     }
@@ -435,12 +496,14 @@ export class StudioScene extends Phaser.Scene {
   }
 
   /** Captures player position without blocking the render loop. */
-  private saveProgress(): void {
-    this.saveSystem.save(
+  private saveProgress(): boolean {
+    this.lastSaveSucceeded = this.saveSystem.save(
       { x: this.player.x, y: this.player.y },
       this.questManager.getState(),
       this.storyManager.getState(),
+      this.tutorialProgress,
     );
+    return this.lastSaveSucceeded;
   }
 
   /** Persists progress and releases scene-owned resources. */
@@ -448,5 +511,6 @@ export class StudioScene extends Phaser.Scene {
     this.saveProgress();
     this.autoSaveTimer.remove(false);
     this.dialogueSystem.destroy();
+    this.guidanceController.destroy();
   }
 }

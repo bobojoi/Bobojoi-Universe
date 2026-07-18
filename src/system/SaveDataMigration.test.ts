@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultStudioQuestState } from '../quest/StudioQuestManager';
 import { createDefaultMainStoryState } from '../story/MainStoryManager';
+import { migrateLegacyTutorialProgress } from '../tutorial/TutorialProgress';
 import { migrateSaveData, readPlayerPosition, SAVE_VERSION } from './SaveDataMigration';
 
 const TEST_TIMESTAMP = '2026-07-18T00:00:00.000Z';
@@ -38,12 +39,55 @@ describe('readPlayerPosition', () => {
 
 describe('migrateSaveData', () => {
   it('migrates v1 with a default quest and preserves a valid player', () => {
+    const quest = createDefaultStudioQuestState();
+    const story = createDefaultMainStoryState(false);
     expect(migrateSaveData(createSave(1), TEST_TIMESTAMP)).toEqual({
       version: SAVE_VERSION,
       player: VALID_PLAYER,
-      studioQuest: createDefaultStudioQuestState(),
-      ...createDefaultMainStoryState(false),
+      studioQuest: quest,
+      ...story,
+      tutorialProgress: migrateLegacyTutorialProgress(quest, story),
       updatedAt: TEST_TIMESTAMP,
+    });
+  });
+
+  it('migrates v6 into v7 without replaying completed chapter transitions', () => {
+    const migrated = migrateSaveData(
+      createSave(6, {
+        studioQuest: { stage: 'completed', investigated: {} },
+        mainStoryStage: 'chapter-two-complete',
+        storyFlags: { acceptedFirstOffer: true, firstOfferResolved: true },
+        chapterOneNode: 'complete',
+        chapterOneOutcome: 'show-stable',
+        chapterTwoNode: 'chapter-two-ending',
+        chapterTwoOutcome: 'commercialBreakthrough',
+        chapterTwoFlags: { acceptedAgencyStyle: true, acceptedFinalClientDemand: true },
+      }),
+      TEST_TIMESTAMP,
+    );
+    expect(migrated).toMatchObject({
+      version: 7,
+      tutorialProgress: {
+        sawIntroText: true,
+        sawChapterOneCompleteTransition: true,
+        sawChapterTwoStartTransition: true,
+        sawChapterTwoCompleteTransition: true,
+      },
+    });
+  });
+
+  it('normalizes partial and damaged v7 tutorial flags safely', () => {
+    const migrated = migrateSaveData(
+      createSave(7, {
+        studioQuest: { stage: 'not-started', investigated: {} },
+        tutorialProgress: { sawIntroText: true, sawMovementHint: 'yes' },
+      }),
+      TEST_TIMESTAMP,
+    );
+    expect(migrated?.tutorialProgress).toMatchObject({
+      sawIntroText: true,
+      sawMovementHint: false,
+      sawAutosaveExplanation: false,
     });
   });
 

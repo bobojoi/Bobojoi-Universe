@@ -26,3 +26,8 @@ canvas {
   display: block;
   margin: 0 auto;
 }
+
+canvas:focus-visible {
+  outline: 2px solid #78f0cf;
+  outline-offset: -2px;
+}

@@ -93,6 +93,8 @@ export interface StoryChoiceResult {
   success: boolean;
   speaker: string;
   text: string;
+  /** Actual bounded deltas already committed by the resolver. */
+  effects?: PlayerProgressEffects;
   chapterCompleted?: boolean;
   completionLabel?: string;
 }
@@ -337,7 +339,8 @@ export class MainStoryManager {
       return { success: false, speaker: BUBBLE_GIRL, text: condition.reason ?? '目前無法選擇。' };
     }
 
-    this.progress = cloneProgressWithEffects(this.progress, definition.effects);
+    const applied = applyEffectsAndMeasure(this.progress, definition.effects);
+    this.progress = applied.progress;
     this.stage = definition.targetStage;
     this.flags = createResolvedFlags(definition.decisionFlag);
     this.chapterOneState = {
@@ -346,7 +349,12 @@ export class MainStoryManager {
     };
     this.chapterTwoState = createDefaultChapterTwoState(false);
     this.notifyStateChanged();
-    return { success: true, speaker: BUBBLE_GIRL, text: definition.followUp };
+    return {
+      success: true,
+      speaker: BUBBLE_GIRL,
+      text: definition.followUp,
+      effects: applied.effects,
+    };
   }
 
   /** Reports whether the one-shot first offer remains available. */
@@ -419,7 +427,8 @@ export class MainStoryManager {
     if (!resolution.success || !resolution.effects || !resolution.nextState) {
       return { success: false, speaker: BUBBLE_GIRL, text: resolution.text };
     }
-    this.progress = cloneProgressWithEffects(this.progress, resolution.effects);
+    const applied = applyEffectsAndMeasure(this.progress, resolution.effects);
+    this.progress = applied.progress;
     this.chapterOneState = resolution.nextState;
     if (resolution.completed) this.stage = 'chapter-one-complete';
     this.notifyStateChanged();
@@ -427,6 +436,7 @@ export class MainStoryManager {
       success: true,
       speaker: BUBBLE_GIRL,
       text: resolution.text,
+      effects: applied.effects,
       chapterCompleted: resolution.completed,
       completionLabel: resolution.completed ? CHAPTER_ONE_COMPLETION : undefined,
     };
@@ -443,7 +453,8 @@ export class MainStoryManager {
     if (!resolution.success || !resolution.effects || !resolution.nextState) {
       return { success: false, speaker: BUBBLE_GIRL, text: resolution.text };
     }
-    this.progress = cloneProgressWithEffects(this.progress, resolution.effects);
+    const applied = applyEffectsAndMeasure(this.progress, resolution.effects);
+    this.progress = applied.progress;
     this.chapterTwoState = resolution.nextState;
     this.stage = resolution.completed
       ? 'chapter-two-complete'
@@ -453,6 +464,7 @@ export class MainStoryManager {
       success: true,
       speaker: BUBBLE_GIRL,
       text: resolution.text,
+      effects: applied.effects,
       chapterCompleted: resolution.completed,
       completionLabel: resolution.completed ? CHAPTER_TWO_COMPLETION : undefined,
     };
@@ -487,6 +499,29 @@ function cloneProgressWithEffects(progress: PlayerProgress, effects: PlayerProgr
   const next = new PlayerProgress(snapshot.playerStats, snapshot.relationships);
   next.applyEffects(effects);
   return next;
+}
+
+/** Returns the exact post-clamp deltas so presentation never recalculates story effects. */
+function applyEffectsAndMeasure(
+  progress: PlayerProgress,
+  requestedEffects: PlayerProgressEffects,
+): { progress: PlayerProgress; effects: PlayerProgressEffects } {
+  const before = progress.getSnapshot();
+  const next = cloneProgressWithEffects(progress, requestedEffects);
+  const after = next.getSnapshot();
+  return {
+    progress: next,
+    effects: {
+      stats: {
+        technique: after.playerStats.technique - before.playerStats.technique,
+        popularity: after.playerStats.popularity - before.playerStats.popularity,
+        conviction: after.playerStats.conviction - before.playerStats.conviction,
+        energy: after.playerStats.energy - before.playerStats.energy,
+      },
+      bubbleGirlTrust:
+        after.relationships.bubbleGirlTrust - before.relationships.bubbleGirlTrust,
+    },
+  };
 }
 
 /** Creates all-false first-offer history for new or repaired saves. */

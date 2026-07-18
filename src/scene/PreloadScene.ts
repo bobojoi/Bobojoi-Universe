@@ -59,7 +59,7 @@ export class PreloadScene extends Phaser.Scene {
     this.createPlaceholderTextures();
 
     // A brief handoff prevents a jarring flash on fast local machines.
-    this.time.delayedCall(LOAD_DELAY_MS, () => this.scene.start(SCENE_KEYS.STUDIO));
+    this.time.delayedCall(LOAD_DELAY_MS, () => this.scene.start(SCENE_KEYS.TITLE));
   }
 
   /** Produces a valid data URI without introducing an external placeholder file. */

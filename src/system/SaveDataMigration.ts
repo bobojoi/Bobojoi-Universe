@@ -9,9 +9,14 @@ import {
   normalizeMainStoryState,
   type MainStoryState,
 } from '../story/MainStoryManager';
+import {
+  migrateLegacyTutorialProgress,
+  normalizeTutorialProgress,
+  type TutorialProgressState,
+} from '../tutorial/TutorialProgress';
 
 /** Current serialized schema version. */
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 7;
 
 /** A validated world position; non-finite coordinates never satisfy this shape. */
 export interface PlayerSavePosition {
@@ -24,6 +29,7 @@ export interface GameSaveData extends MainStoryState {
   version: typeof SAVE_VERSION;
   player?: PlayerSavePosition;
   studioQuest: StudioQuestState;
+  tutorialProgress: TutorialProgressState;
   updatedAt: string;
 }
 
@@ -44,7 +50,7 @@ export function migrateSaveData(value: unknown, fallbackTimestamp: string): Game
     studioQuest = migrateLegacyStudioQuestState(value.studioQuest);
   } else if (
     value.version === 3 || value.version === 4 || value.version === 5 ||
-    value.version === SAVE_VERSION
+    value.version === 6 || value.version === SAVE_VERSION
   ) {
     studioQuest = normalizeStudioQuestState(value.studioQuest);
   } else {
@@ -53,10 +59,14 @@ export function migrateSaveData(value: unknown, fallbackTimestamp: string): Game
 
   const prologueComplete = studioQuest.stage === 'completed';
   const storyState =
-    value.version === 4 || value.version === 5 || value.version === SAVE_VERSION
+    value.version === 4 || value.version === 5 || value.version === 6 ||
+      value.version === SAVE_VERSION
       ? normalizeMainStoryState(value, prologueComplete)
       : createDefaultMainStoryState(prologueComplete);
-  return { ...common, studioQuest, ...storyState };
+  const tutorialProgress = value.version === SAVE_VERSION
+    ? normalizeTutorialProgress(value.tutorialProgress)
+    : migrateLegacyTutorialProgress(studioQuest, storyState);
+  return { ...common, studioQuest, ...storyState, tutorialProgress };
 }
 
 /** Accepts coordinates only when both values are finite JavaScript numbers. */

@@ -53,7 +53,7 @@ export class StudioQuestWorldController {
 
   /** Refreshes derived task copy after state changes without replaying effects. */
   public refreshHud(): void {
-    this.world.hud.setQuest(this.quest.getHudView());
+    this.world.hud.setQuest(this.quest.isCompleted() ? undefined : this.quest.getHudView());
   }
 
   /** Maps the small studio event vocabulary to concrete scene effects. */

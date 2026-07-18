@@ -2,8 +2,8 @@ import Phaser from 'phaser';
 import { GAME_WIDTH } from '../config/gameConfig';
 import { COLORS, DEPTH } from '../constants/GameConstants';
 import type { StudioQuestHudView } from '../quest/StudioQuestManager';
+import type { ProgressPresentation } from '../presentation/ProgressPresentation';
 import type { PlayerStatsState, RelationshipState } from '../story/PlayerProgress';
-import type { MainStoryHudView } from '../story/MainStoryManager';
 
 const TITLE_X = 32;
 const TITLE_Y = 28;
@@ -55,7 +55,7 @@ export class HUD {
       .setDepth(DEPTH.UI);
 
     scene.add
-      .text(TITLE_X, TITLE_Y + 28, 'WASD 移動', {
+      .text(TITLE_X, TITLE_Y + 28, 'WASD 移動 · E 互動 · Esc 主選單', {
         color: '#b8b9d9',
         fontFamily: 'Noto Sans TC, PingFang TC, sans-serif',
         fontSize: '15px',
@@ -156,7 +156,7 @@ export class HUD {
 
     this.setInteractionPrompt();
     this.setQuest();
-    this.setMainStory();
+    this.setProgress();
   }
 
   /** Updates the compact cast card immediately after a story effect. */
@@ -203,7 +203,7 @@ export class HUD {
   }
 
   /** Shows current chapter progress without duplicating story-stage rules in the UI. */
-  public setMainStory(view?: MainStoryHudView): void {
+  public setProgress(view?: ProgressPresentation): void {
     this.storyBackground.clear();
     this.storyTitle.setVisible(Boolean(view));
     this.storyObjective.setVisible(Boolean(view));
@@ -217,7 +217,7 @@ export class HUD {
       STORY_HEIGHT,
       QUEST_RADIUS,
     );
-    this.storyBackground.lineStyle(2, view.completed ? COLORS.GOLD : COLORS.MINT, 0.65);
+    this.storyBackground.lineStyle(2, view.nextJourneyUnavailable ? COLORS.GOLD : COLORS.MINT, 0.65);
     this.storyBackground.strokeRoundedRect(
       STORY_X,
       STORY_Y,
@@ -225,8 +225,8 @@ export class HUD {
       STORY_HEIGHT,
       QUEST_RADIUS,
     );
-    this.storyTitle.setText(view.completed ? 'CHAPTER COMPLETE' : view.title);
-    this.storyObjective.setText(view.objective);
+    this.storyTitle.setText(view.chapterLabel);
+    this.storyObjective.setText(`目前目標：${view.objective}`);
   }
 
   /** Celebrates completion once without leaving an event listener behind. */

@@ -9,7 +9,7 @@ export class BootScene extends Phaser.Scene {
 
   public create(): void {
     // Set one shared input convention before any gameplay scene is created.
-    this.input.keyboard?.addCapture(['W', 'A', 'S', 'D', 'E']);
+    this.input.keyboard?.addCapture(['W', 'A', 'S', 'D', 'E', 'UP', 'DOWN', 'ENTER', 'ESC']);
     this.cameras.main.setBackgroundColor(COLORS.NIGHT);
 
     // Hand off immediately; PreloadScene owns all loading feedback.

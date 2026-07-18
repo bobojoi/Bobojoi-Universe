@@ -7,6 +7,8 @@ const game = new Phaser.Game(gameConfig);
 
 /** Allow the canvas to receive explicit keyboard focus after pointer interaction. */
 game.canvas.setAttribute('tabindex', '0');
+game.canvas.setAttribute('role', 'application');
+game.canvas.setAttribute('aria-label', '泡泡家族遊戲控制');
 
 /** Destroy WebGL and event resources during hot-module replacement. */
 if (import.meta.hot) {

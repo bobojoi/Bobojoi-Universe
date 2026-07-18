@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { BootScene } from '../scene/BootScene';
 import { PreloadScene } from '../scene/PreloadScene';
 import { StudioScene } from '../scene/StudioScene';
+import { TitleScene } from '../scene/TitleScene';
 
 /** Logical canvas size used by gameplay and UI positioning. */
 export const GAME_WIDTH = 1280;
@@ -27,5 +28,5 @@ export const gameConfig: Phaser.Types.Core.GameConfig = {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [BootScene, PreloadScene, StudioScene],
+  scene: [BootScene, PreloadScene, TitleScene, StudioScene],
 };
