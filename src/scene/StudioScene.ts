@@ -7,9 +7,9 @@ import {
   createDefaultStudioQuestState,
   StudioQuestManager,
   type StudioInvestigationId,
-  type StudioQuestEvent,
   type StudioQuestInteractionResult,
 } from '../quest/StudioQuestManager';
+import { StudioQuestWorldController } from '../quest/StudioQuestWorldController';
 import { DialogueSystem } from '../system/DialogueSystem';
 import { InteractionSystem } from '../system/InteractionSystem';
 import { SaveSystem } from '../system/SaveSystem';
@@ -23,8 +23,6 @@ const BUBBLE_GIRL_X = 960;
 const BUBBLE_GIRL_Y = 590;
 const BUBBLE_DOG_X = 520;
 const BUBBLE_DOG_Y = 460;
-const BUBBLE_DOG_RUN_X = 340;
-const BUBBLE_DOG_RUN_Y = 350;
 const PROP_BOX_X = 720;
 const PROP_BOX_Y = 980;
 const BUBBLE_TABLE_X = 1260;
@@ -57,10 +55,12 @@ const STAR_RING_PULSE_DURATION_MS = 720;
 export class StudioScene extends Phaser.Scene {
   private player!: Player;
   private interactionKey!: Phaser.Input.Keyboard.Key;
+  private restartKey?: Phaser.Input.Keyboard.Key;
   private interactionSystem!: InteractionSystem;
   private dialogueSystem!: DialogueSystem;
   private saveSystem!: SaveSystem;
   private questManager!: StudioQuestManager;
+  private questWorldController!: StudioQuestWorldController;
   private hud!: HUD;
   private bubbleDog!: BubbleDog;
   private starRing!: Phaser.GameObjects.Container;
@@ -91,19 +91,19 @@ export class StudioScene extends Phaser.Scene {
     );
 
     const bubbleGirl = new BubbleGirl(this, BUBBLE_GIRL_X, BUBBLE_GIRL_Y);
-    const dogWasMoved = this.questManager.getState().investigated['dog-mat'];
-    this.bubbleDog = new BubbleDog(
-      this,
-      dogWasMoved ? BUBBLE_DOG_RUN_X : BUBBLE_DOG_X,
-      dogWasMoved ? BUBBLE_DOG_RUN_Y : BUBBLE_DOG_Y,
-    );
+    this.bubbleDog = new BubbleDog(this, BUBBLE_DOG_X, BUBBLE_DOG_Y);
     const investigationTargets = this.createInvestigationTargets();
     this.starRing = this.createStarRing();
-    this.starRing.setVisible(this.questManager.isRingVisible());
 
     this.dialogueSystem = new DialogueSystem(this);
     this.hud = new HUD(this);
-    this.refreshQuestHud();
+    this.questWorldController = new StudioQuestWorldController(this.questManager, {
+      bubbleDog: this.bubbleDog,
+      starRing: this.starRing,
+      dialogue: this.dialogueSystem,
+      hud: this.hud,
+    });
+    this.questWorldController.synchronizeFromState();
     this.interactionSystem = new InteractionSystem(this.player);
     this.interactionSystem.register({
       target: bubbleGirl,
@@ -125,7 +125,7 @@ export class StudioScene extends Phaser.Scene {
     this.interactionSystem.register({
       target: this.starRing,
       prompt: '拿起星光泡泡環',
-      isEnabled: () => this.questManager.isRingVisible(),
+      isEnabled: () => this.questWorldController.isRingAvailable(),
       onInteract: () => this.handleQuestInteraction(this.questManager.collectRing()),
     });
 
@@ -143,6 +143,12 @@ export class StudioScene extends Phaser.Scene {
 
   public update(): void {
     this.player.updateMovement();
+
+    // R is a development-only restart hook for repeatable lifecycle regression checks.
+    if (this.restartKey && Phaser.Input.Keyboard.JustDown(this.restartKey)) {
+      this.scene.restart();
+      return;
+    }
 
     const interaction = this.interactionSystem.getNearest();
     this.hud.setInteractionPrompt(
@@ -260,39 +266,15 @@ export class StudioScene extends Phaser.Scene {
     });
   }
 
-  /** Presents quest feedback and maps state-machine events into world changes. */
+  /** Delegates quest presentation and world effects to the studio coordinator. */
   private handleQuestInteraction(result: StudioQuestInteractionResult): void {
-    this.dialogueSystem.show(result.message);
-    for (const event of result.events ?? []) this.handleQuestEvent(event);
-  }
-
-  /** Keeps one-way world effects out of the quest manager. */
-  private handleQuestEvent(event: StudioQuestEvent): void {
-    switch (event) {
-      case 'dog-runs':
-        this.bubbleDog.runTo(BUBBLE_DOG_RUN_X, BUBBLE_DOG_RUN_Y);
-        break;
-      case 'ring-revealed':
-        this.starRing.setVisible(true);
-        break;
-      case 'ring-collected':
-        this.starRing.setVisible(false);
-        break;
-      case 'completed':
-        this.hud.showQuestCompleted();
-        break;
-    }
+    this.questWorldController.applyInteraction(result);
   }
 
   /** Refreshes derived HUD content and persists every meaningful quest transition. */
   private handleQuestStateChanged(): void {
-    this.refreshQuestHud();
+    this.questWorldController.refreshHud();
     this.saveProgress();
-  }
-
-  /** Applies the manager's derived quest view without duplicating quest rules. */
-  private refreshQuestHud(): void {
-    this.hud.setQuest(this.questManager.getHudView());
   }
 
   /** Creates keyboard controls in one place for later remapping support. */
@@ -303,6 +285,9 @@ export class StudioScene extends Phaser.Scene {
     }
 
     this.interactionKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
+    if (import.meta.env.DEV) {
+      this.restartKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
+    }
     return {
       up: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W),
       down: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S),

@@ -13,8 +13,6 @@ export type StudioQuestStage =
 export interface StudioQuestState {
   stage: StudioQuestStage;
   investigated: Record<StudioInvestigationId, boolean>;
-  ringCollected: boolean;
-  completed: boolean;
 }
 
 /** Scene events keep world animation outside the quest state machine. */
@@ -57,31 +55,36 @@ export function createDefaultStudioQuestState(): StudioQuestState {
       'bubble-table': false,
       'dog-mat': false,
     },
-    ringCollected: false,
-    completed: false,
   };
 }
 
-/** Converts unknown or partial save input into a valid TASK-002 state. */
+/** Converts current-version input without reviving removed legacy flags. */
 export function normalizeStudioQuestState(value: unknown): StudioQuestState {
   const fallback = createDefaultStudioQuestState();
   if (!isRecord(value)) return fallback;
 
-  const investigated = isRecord(value.investigated) ? value.investigated : {};
-  const stage = isStudioQuestStage(value.stage) ? value.stage : fallback.stage;
-  const completed = value.completed === true || stage === 'completed';
-  const ringCollected = value.ringCollected === true || completed || stage === 'ring-collected';
-
   return {
-    stage: completed ? 'completed' : ringCollected ? 'ring-collected' : stage,
-    investigated: {
-      'prop-box': investigated['prop-box'] === true,
-      'bubble-table': investigated['bubble-table'] === true,
-      'dog-mat': investigated['dog-mat'] === true,
-    },
-    ringCollected,
-    completed,
+    stage: isStudioQuestStage(value.stage) ? value.stage : fallback.stage,
+    investigated: normalizeInvestigations(value.investigated),
   };
+}
+
+/** Migrates redundant v2 flags using one documented highest-stage-wins policy. */
+export function migrateLegacyStudioQuestState(value: unknown): StudioQuestState {
+  const fallback = createDefaultStudioQuestState();
+  if (!isRecord(value)) return fallback;
+
+  const legacyStage = isStudioQuestStage(value.stage) ? value.stage : fallback.stage;
+  let stage = legacyStage;
+
+  // Precedence: completed > ring-collected > ring-discovered > in-progress > not-started.
+  if (value.completed === true || legacyStage === 'completed') {
+    stage = 'completed';
+  } else if (value.ringCollected === true || legacyStage === 'ring-collected') {
+    stage = 'ring-collected';
+  }
+
+  return { stage, investigated: normalizeInvestigations(value.investigated) };
 }
 
 /** Owns the small tutorial state machine without controlling scene objects or UI. */
@@ -111,7 +114,6 @@ export class StudioQuestManager {
         return { message: '泡妞：那道閃光一定是星光泡泡環，快去拿起來看看！' };
       case 'ring-collected':
         this.state.stage = 'completed';
-        this.state.completed = true;
         this.notifyStateChanged();
         return {
           message: '泡妞：找到了！有了星光泡泡環，今天的表演一定會閃閃發亮！',
@@ -153,12 +155,11 @@ export class StudioQuestManager {
 
   /** Adds the discovered ring to the player's quest inventory exactly once. */
   public collectRing(): StudioQuestInteractionResult {
-    if (this.state.stage !== 'ring-discovered') {
+    if (!this.canCollectRing()) {
       return { message: '這裡目前沒有可以拿取的東西。' };
     }
 
     this.state.stage = 'ring-collected';
-    this.state.ringCollected = true;
     this.notifyStateChanged();
     return {
       message: '你取得了「星光泡泡環」！把它交給泡妞吧。',
@@ -171,9 +172,19 @@ export class StudioQuestManager {
     return normalizeStudioQuestState(this.state);
   }
 
-  /** Exposes only the derived world state needed by StudioScene. */
-  public isRingVisible(): boolean {
+  /** Provides one authoritative condition for visibility, interaction, and collection. */
+  public canCollectRing(): boolean {
     return this.state.stage === 'ring-discovered';
+  }
+
+  /** Derives inventory history from stage instead of persisting a duplicate flag. */
+  public isRingCollected(): boolean {
+    return this.state.stage === 'ring-collected' || this.state.stage === 'completed';
+  }
+
+  /** Derives completion from stage instead of persisting a duplicate flag. */
+  public isCompleted(): boolean {
+    return this.state.stage === 'completed';
   }
 
   /** Exposes task copy without coupling HUD to quest rules. */
@@ -206,6 +217,16 @@ export class StudioQuestManager {
 /** Narrows JSON values without trusting persisted data. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+/** Normalizes the three independent investigation flags for every save version. */
+function normalizeInvestigations(value: unknown): StudioQuestState['investigated'] {
+  const investigated = isRecord(value) ? value : {};
+  return {
+    'prop-box': investigated['prop-box'] === true,
+    'bubble-table': investigated['bubble-table'] === true,
+    'dog-mat': investigated['dog-mat'] === true,
+  };
 }
 
 /** Rejects unknown future or corrupted stage strings during load. */

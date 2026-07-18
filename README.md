@@ -14,11 +14,13 @@ npm run dev
 ## 品質檢查
 
 ```bash
+npm test
 npm run typecheck
 npm run build
 ```
 
 網址加入 `?debug` 可顯示 Arcade Physics 碰撞範圍。
+開發伺服器中可按 `R` 重啟 StudioScene，供場景生命週期回歸測試；正式建置不註冊此按鍵。
 
 ## 架構
 

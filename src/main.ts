@@ -5,6 +5,9 @@ import './style.css';
 /** The application owns one Phaser instance for the lifetime of the page. */
 const game = new Phaser.Game(gameConfig);
 
+/** Allow the canvas to receive explicit keyboard focus after pointer interaction. */
+game.canvas.setAttribute('tabindex', '0');
+
 /** Destroy WebGL and event resources during hot-module replacement. */
 if (import.meta.hot) {
   import.meta.hot.dispose(() => game.destroy(true));
