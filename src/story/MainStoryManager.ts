@@ -2,7 +2,6 @@ import {
   createDefaultChapterOneState,
   getChapterOneInteraction,
   getChapterOneObjective,
-  getChapterOnePostDialogue,
   getChapterOneSummary,
   getRouteOpeningNode,
   normalizeChapterOneState,
@@ -12,6 +11,21 @@ import {
   type ChapterOneState,
   type ChapterOneSummary,
 } from './ChapterOneStory';
+import {
+  advanceChapterTwoMessage,
+  createDefaultChapterTwoState,
+  getChapterTwoInteraction,
+  getChapterTwoObjective,
+  getChapterTwoPostDialogue,
+  getChapterTwoStage,
+  getChapterTwoSummary,
+  normalizeChapterTwoState,
+  resolveChapterTwoChoice,
+  type ChapterOneHistoryContext,
+  type ChapterTwoChoiceId,
+  type ChapterTwoState,
+  type ChapterTwoSummary,
+} from './ChapterTwoStory';
 import {
   createDefaultPlayerStats,
   createDefaultRelationships,
@@ -23,40 +37,45 @@ import {
   type RelationshipState,
 } from './PlayerProgress';
 
-/** Main-story stage is the single source of truth for the current chapter position. */
+/** Main-story stage is the broad single source of truth for the current chapter position. */
 export type MainStoryStage =
   | 'prologue'
   | 'first-offer'
   | 'preparing-show'
   | 'training-first'
   | 'small-show'
-  | 'chapter-one-complete';
+  | 'chapter-one-complete'
+  | 'chapter-two-intro'
+  | 'agency-offer'
+  | 'proposal-discussion'
+  | 'creative-choice'
+  | 'chapter-two-complete';
 
-/** Type-safe story flags record the route decision separately from current stage. */
+/** Type-safe story flags retain the first route decision separately from stage. */
 export type StoryFlagId =
   | 'acceptedFirstOffer'
   | 'choseTrainingFirst'
   | 'negotiatedSmallShow'
   | 'firstOfferResolved';
 
-/** Serializable first-offer flags. */
+/** Serializable first-offer history. */
 export type StoryFlags = Record<StoryFlagId, boolean>;
 
 /** Stable identifiers for the three first-offer decisions. */
 export type FirstOfferChoiceId = 'accept-now' | 'train-first' | 'small-show';
 
-/** Every dialogue choice is resolved by the story owner, never by the scene. */
-export type StoryChoiceId = FirstOfferChoiceId | ChapterOneChoiceId;
+/** Every dialogue choice resolves through the story owner rather than the scene. */
+export type StoryChoiceId = FirstOfferChoiceId | ChapterOneChoiceId | ChapterTwoChoiceId;
 
-/** Complete persistent story and character progression state. */
-export interface MainStoryState extends ChapterOneState {
+/** Complete v6 story and character progression state. */
+export interface MainStoryState extends ChapterOneState, ChapterTwoState {
   mainStoryStage: MainStoryStage;
   playerStats: PlayerStatsState;
   relationships: RelationshipState;
   storyFlags: StoryFlags;
 }
 
-/** UI-ready choice data contains resolved rules but no presentation objects. */
+/** UI-ready choice data contains resolved conditions but no Phaser objects. */
 export interface StoryChoiceView {
   id: StoryChoiceId;
   label: string;
@@ -64,20 +83,21 @@ export interface StoryChoiceView {
   unavailableReason?: string;
 }
 
-/** Structured story dialogue keeps scene code free of route rules. */
+/** Structured story dialogue keeps the scene free of chapter rules. */
 export type StoryInteraction =
   | { kind: 'message'; speaker: string; text: string }
   | { kind: 'choices'; speaker: string; text: string; choices: StoryChoiceView[] };
 
-/** Choice resolution reports one follow-up line without exposing mutation details. */
+/** Choice resolution reports presentation data without exposing mutations. */
 export interface StoryChoiceResult {
   success: boolean;
   speaker: string;
   text: string;
   chapterCompleted?: boolean;
+  completionLabel?: string;
 }
 
-/** Compact main-story HUD state is derived from the same persisted node. */
+/** Compact main-story HUD state derives from the same event nodes. */
 export interface MainStoryHudView {
   title: string;
   objective: string;
@@ -87,7 +107,7 @@ export interface MainStoryHudView {
 interface FirstOfferChoiceDefinition {
   id: FirstOfferChoiceId;
   label: string;
-  targetStage: Exclude<MainStoryStage, 'prologue' | 'first-offer' | 'chapter-one-complete'>;
+  targetStage: 'preparing-show' | 'training-first' | 'small-show';
   route: ChapterOneRoute;
   decisionFlag: Exclude<StoryFlagId, 'firstOfferResolved'>;
   effects: PlayerProgressEffects;
@@ -98,8 +118,10 @@ interface FirstOfferChoiceDefinition {
 const BUBBLE_GIRL = '泡妞';
 const FIRST_OFFER_PROMPT =
   '工作室剛收到第一個演出邀請，但時間很趕，我們還沒有完全準備好。你想怎麼做？';
+const CHAPTER_ONE_COMPLETION = '第一章完成：夢想的第一步';
+const CHAPTER_TWO_COMPLETION = '第二章完成：成功的代價';
 
-/** Ordered definitions provide deterministic UI order and conflict-repair priority. */
+/** Ordered definitions provide deterministic UI order and route-repair priority. */
 const FIRST_OFFER_CHOICES: readonly FirstOfferChoiceDefinition[] = [
   {
     id: 'accept-now',
@@ -139,7 +161,7 @@ const FIRST_OFFER_CHOICES: readonly FirstOfferChoiceDefinition[] = [
   },
 ] as const;
 
-/** Creates safe story defaults based on whether the tutorial prologue is complete. */
+/** Creates safe defaults while keeping chapter two locked behind chapter one. */
 export function createDefaultMainStoryState(prologueComplete: boolean): MainStoryState {
   return {
     mainStoryStage: prologueComplete ? 'first-offer' : 'prologue',
@@ -147,15 +169,15 @@ export function createDefaultMainStoryState(prologueComplete: boolean): MainStor
     relationships: createDefaultRelationships(),
     storyFlags: createDefaultStoryFlags(),
     ...createDefaultChapterOneState(),
+    ...createDefaultChapterTwoState(false),
   };
 }
 
-/** Normalizes current story data and repairs contradictory routes centrally. */
+/** Normalizes story data and repairs contradictory chapter, route, and node state centrally. */
 export function normalizeMainStoryState(value: unknown, prologueComplete: boolean): MainStoryState {
   const source = isRecord(value) ? value : {};
   const playerStats = normalizePlayerStats(source.playerStats);
   const relationships = normalizeRelationships(source.relationships);
-
   if (!prologueComplete) {
     return {
       mainStoryStage: 'prologue',
@@ -163,12 +185,14 @@ export function normalizeMainStoryState(value: unknown, prologueComplete: boolea
       relationships,
       storyFlags: createDefaultStoryFlags(),
       ...createDefaultChapterOneState(),
+      ...createDefaultChapterTwoState(false),
     };
   }
 
   const rawFlags = normalizeStoryFlags(source.storyFlags);
+  const postChapterOne = isPostChapterOneStage(source.mainStoryStage) || source.chapterOneNode === 'complete';
   const selectedChoice = FIRST_OFFER_CHOICES.find(({ decisionFlag }) => rawFlags[decisionFlag]) ??
-    (source.mainStoryStage === 'chapter-one-complete' ? FIRST_OFFER_CHOICES[0] : undefined);
+    (postChapterOne ? FIRST_OFFER_CHOICES[0] : undefined);
   if (!selectedChoice) {
     return {
       mainStoryStage: 'first-offer',
@@ -176,26 +200,41 @@ export function normalizeMainStoryState(value: unknown, prologueComplete: boolea
       relationships,
       storyFlags: createDefaultStoryFlags(),
       ...createDefaultChapterOneState(),
+      ...createDefaultChapterTwoState(false),
     };
   }
 
-  const chapterComplete =
-    source.mainStoryStage === 'chapter-one-complete' || source.chapterOneNode === 'complete';
-  const chapterState = normalizeChapterOneState(source, selectedChoice.route, chapterComplete);
+  const chapterOneState = normalizeChapterOneState(source, selectedChoice.route, postChapterOne);
+  if (!postChapterOne) {
+    return {
+      mainStoryStage: selectedChoice.targetStage,
+      playerStats,
+      relationships,
+      storyFlags: createResolvedFlags(selectedChoice.decisionFlag),
+      ...chapterOneState,
+      ...createDefaultChapterTwoState(false),
+    };
+  }
+
+  const forceChapterTwoComplete =
+    source.mainStoryStage === 'chapter-two-complete' || source.chapterTwoNode === 'chapter-two-ending';
+  const chapterTwoState = normalizeChapterTwoState(source, true, forceChapterTwoComplete);
   return {
-    mainStoryStage: chapterComplete ? 'chapter-one-complete' : selectedChoice.targetStage,
+    mainStoryStage: getChapterTwoStage(chapterTwoState.chapterTwoNode),
     playerStats,
     relationships,
     storyFlags: createResolvedFlags(selectedChoice.decisionFlag),
-    ...chapterState,
+    ...chapterOneState,
+    ...chapterTwoState,
   };
 }
 
-/** Owns main-story rules, conditions, flags, and atomic effects without Phaser. */
+/** Owns all chapter rules, conditions, progression, and atomic effects without Phaser. */
 export class MainStoryManager {
   private stage: MainStoryStage;
   private flags: StoryFlags;
-  private chapterState: ChapterOneState;
+  private chapterOneState: ChapterOneState;
+  private chapterTwoState: ChapterTwoState;
   private progress: PlayerProgress;
 
   public constructor(
@@ -206,15 +245,20 @@ export class MainStoryManager {
     const normalized = normalizeMainStoryState(initialState, isPrologueComplete());
     this.stage = normalized.mainStoryStage;
     this.flags = normalized.storyFlags;
-    this.chapterState = {
+    this.chapterOneState = {
       chapterOneNode: normalized.chapterOneNode,
       chapterOneOutcome: normalized.chapterOneOutcome,
       chapterOneFlags: normalized.chapterOneFlags,
     };
+    this.chapterTwoState = {
+      chapterTwoNode: normalized.chapterTwoNode,
+      chapterTwoOutcome: normalized.chapterTwoOutcome,
+      chapterTwoFlags: normalized.chapterTwoFlags,
+    };
     this.progress = new PlayerProgress(normalized.playerStats, normalized.relationships);
   }
 
-  /** Returns the correct BubbleGirl story interaction, or defers to the tutorial quest. */
+  /** Returns BubbleGirl's current interaction or defers to the tutorial quest. */
   public interactWithBubbleGirl(): StoryInteraction | undefined {
     if (!this.isPrologueComplete()) return undefined;
     if (this.stage === 'prologue') {
@@ -229,24 +273,38 @@ export class MainStoryManager {
         choices: this.getFirstOfferChoices(),
       };
     }
+    if (isChapterOneRouteStage(this.stage)) return this.getChapterOneInteraction();
+
+    // A newly completed first chapter enters chapter two on the next interaction.
     if (this.stage === 'chapter-one-complete') {
+      this.chapterTwoState = createDefaultChapterTwoState(true);
+      this.stage = 'chapter-two-intro';
+    }
+    if (this.stage === 'chapter-two-complete') {
       return {
         kind: 'message',
         speaker: BUBBLE_GIRL,
-        text: getChapterOnePostDialogue(this.getRoute(), this.chapterState.chapterOneOutcome),
+        text: getChapterTwoPostDialogue(this.chapterTwoState.chapterTwoOutcome),
       };
     }
 
-    const route = this.getRoute();
-    const interaction = route
-      ? getChapterOneInteraction(this.chapterState, route, this.progress)
-      : undefined;
-    return interaction
-      ? { kind: 'choices', ...interaction }
-      : { kind: 'message', speaker: BUBBLE_GIRL, text: '先把眼前的安排確認好吧。' };
+    const interaction = getChapterTwoInteraction(
+      this.chapterTwoState,
+      this.progress,
+      this.getChapterOneHistory(),
+    );
+    if (!interaction) {
+      return { kind: 'message', speaker: BUBBLE_GIRL, text: '先把眼前的合作條件確認清楚吧。' };
+    }
+    if (interaction.kind === 'choices') return interaction;
+
+    this.chapterTwoState = advanceChapterTwoMessage(this.chapterTwoState, interaction.nextNode);
+    this.stage = getChapterTwoStage(this.chapterTwoState.chapterTwoNode);
+    this.notifyStateChanged();
+    return { kind: 'message', speaker: interaction.speaker, text: interaction.text };
   }
 
-  /** Returns condition-resolved first-offer options without exposing predicates to the UI. */
+  /** Returns condition-resolved first-offer options without exposing predicates to UI. */
   public getFirstOfferChoices(): StoryChoiceView[] {
     return FIRST_OFFER_CHOICES.map((choice) => {
       const condition = choice.condition(this.progress);
@@ -254,96 +312,78 @@ export class MainStoryManager {
         id: choice.id,
         label: choice.label,
         enabled: condition.enabled,
-        ...(condition.enabled || !condition.reason
-          ? {}
-          : { unavailableReason: condition.reason }),
+        ...(condition.enabled || !condition.reason ? {} : { unavailableReason: condition.reason }),
       };
     });
   }
 
-  /** Resolves either the first offer or the active route event through one scene API. */
+  /** Resolves first-offer, first-chapter, or second-chapter choices through one scene API. */
   public resolveStoryChoice(choiceId: StoryChoiceId): StoryChoiceResult {
     if (isFirstOfferChoice(choiceId)) return this.resolveFirstOffer(choiceId);
-    const route = this.getRoute();
-    if (!route || this.stage === 'chapter-one-complete') {
-      return { success: false, speaker: BUBBLE_GIRL, text: '這段選擇已經結束了。' };
-    }
-    const resolution = resolveChapterOneChoice(this.chapterState, route, choiceId, this.progress);
-    if (!resolution.success || !resolution.effects || !resolution.nextState) {
-      return { success: false, speaker: BUBBLE_GIRL, text: resolution.text };
-    }
-
-    // Draft every effect before replacing live progression and chapter state once.
-    const snapshot = this.progress.getSnapshot();
-    const nextProgress = new PlayerProgress(snapshot.playerStats, snapshot.relationships);
-    nextProgress.applyEffects(resolution.effects);
-    this.progress = nextProgress;
-    this.chapterState = resolution.nextState;
-    if (resolution.completed) this.stage = 'chapter-one-complete';
-    this.notifyStateChanged();
-    return {
-      success: true,
-      speaker: BUBBLE_GIRL,
-      text: resolution.text,
-      chapterCompleted: resolution.completed,
-    };
+    if (isChapterOneRouteStage(this.stage)) return this.resolveChapterOneChoice(choiceId as ChapterOneChoiceId);
+    if (isChapterTwoActiveStage(this.stage)) return this.resolveChapterTwoChoice(choiceId as ChapterTwoChoiceId);
+    return { success: false, speaker: BUBBLE_GIRL, text: '這段選擇已經結束了。' };
   }
 
-  /** Atomically applies the one available route decision and rejects replays. */
+  /** Atomically applies the first offer and initializes the selected chapter-one route. */
   public resolveFirstOffer(choiceId: FirstOfferChoiceId): StoryChoiceResult {
     if (!this.canResolveFirstOffer()) {
       return { success: false, speaker: BUBBLE_GIRL, text: '這次演出邀請已經做出決定了。' };
     }
     const definition = FIRST_OFFER_CHOICES.find(({ id }) => id === choiceId);
-    if (!definition) {
-      return { success: false, speaker: BUBBLE_GIRL, text: '這個選擇目前不存在。' };
-    }
+    if (!definition) return { success: false, speaker: BUBBLE_GIRL, text: '這個選擇目前不存在。' };
     const condition = definition.condition(this.progress);
     if (!condition.enabled) {
-      return {
-        success: false,
-        speaker: BUBBLE_GIRL,
-        text: condition.reason ?? '目前還不能選擇這個做法。',
-      };
+      return { success: false, speaker: BUBBLE_GIRL, text: condition.reason ?? '目前無法選擇。' };
     }
 
-    const snapshot = this.progress.getSnapshot();
-    const nextProgress = new PlayerProgress(snapshot.playerStats, snapshot.relationships);
-    nextProgress.applyEffects(definition.effects);
-    this.progress = nextProgress;
+    this.progress = cloneProgressWithEffects(this.progress, definition.effects);
     this.stage = definition.targetStage;
     this.flags = createResolvedFlags(definition.decisionFlag);
-    this.chapterState = {
+    this.chapterOneState = {
       chapterOneNode: getRouteOpeningNode(definition.route),
       chapterOneFlags: createDefaultChapterOneState().chapterOneFlags,
     };
+    this.chapterTwoState = createDefaultChapterTwoState(false);
     this.notifyStateChanged();
     return { success: true, speaker: BUBBLE_GIRL, text: definition.followUp };
   }
 
-  /** Reports whether the one-shot offer can still be resolved. */
+  /** Reports whether the one-shot first offer remains available. */
   public canResolveFirstOffer(): boolean {
     return this.isPrologueComplete() && this.stage === 'first-offer' && !this.flags.firstOfferResolved;
   }
 
-  /** Exposes derived chapter facts for future story conditions without mutable flags. */
+  /** Exposes durable first-chapter meaning without mutable state access. */
   public getChapterOneSummary(): ChapterOneSummary {
-    return getChapterOneSummary(this.chapterState, this.getRoute());
+    return getChapterOneSummary(this.chapterOneState, this.getChapterOneRoute());
   }
 
-  /** Returns a compact objective card from the same story state used for interaction. */
+  /** Exposes durable second-chapter meaning for future story conditions. */
+  public getChapterTwoSummary(): ChapterTwoSummary {
+    return getChapterTwoSummary(this.chapterTwoState, this.getChapterOneHistory(), this.progress);
+  }
+
+  /** Returns the current chapter objective from the same persisted event node. */
   public getHudView(): MainStoryHudView | undefined {
     if (!this.isPrologueComplete()) return undefined;
+    if (this.stage === 'first-offer' || isChapterOneRouteStage(this.stage) || this.stage === 'chapter-one-complete') {
+      return {
+        title: 'MAIN STORY / 第一章',
+        objective: this.stage === 'first-offer'
+          ? '和泡妞討論第一個演出邀請'
+          : getChapterOneObjective(this.chapterOneState),
+        completed: this.stage === 'chapter-one-complete',
+      };
+    }
     return {
-      title: 'MAIN STORY / 第一章',
-      objective: this.stage === 'first-offer'
-        ? '和泡妞討論第一個演出邀請'
-        : getChapterOneObjective(this.chapterState),
-      completed: this.stage === 'chapter-one-complete',
+      title: 'MAIN STORY / 第二章',
+      objective: getChapterTwoObjective(this.chapterTwoState),
+      completed: this.stage === 'chapter-two-complete',
     };
   }
 
-  /** Returns a detached snapshot for HUD rendering and persistence. */
+  /** Returns detached serializable data for persistence and HUD rendering. */
   public getState(): MainStoryState {
     const snapshot = this.progress.getSnapshot();
     return {
@@ -351,24 +391,102 @@ export class MainStoryManager {
       playerStats: snapshot.playerStats,
       relationships: snapshot.relationships,
       storyFlags: { ...this.flags },
-      chapterOneNode: this.chapterState.chapterOneNode,
-      chapterOneOutcome: this.chapterState.chapterOneOutcome,
-      chapterOneFlags: { ...this.chapterState.chapterOneFlags },
+      chapterOneNode: this.chapterOneState.chapterOneNode,
+      chapterOneOutcome: this.chapterOneState.chapterOneOutcome,
+      chapterOneFlags: { ...this.chapterOneState.chapterOneFlags },
+      chapterTwoNode: this.chapterTwoState.chapterTwoNode,
+      chapterTwoOutcome: this.chapterTwoState.chapterTwoOutcome,
+      chapterTwoFlags: { ...this.chapterTwoState.chapterTwoFlags },
     };
   }
 
-  /** Maps the mutually exclusive first-offer flag to a permanent route identity. */
-  private getRoute(): ChapterOneRoute | undefined {
+  /** Presents the current first-chapter route choices. */
+  private getChapterOneInteraction(): StoryInteraction {
+    const route = this.getChapterOneRoute();
+    const interaction = route
+      ? getChapterOneInteraction(this.chapterOneState, route, this.progress)
+      : undefined;
+    return interaction
+      ? { kind: 'choices', ...interaction }
+      : { kind: 'message', speaker: BUBBLE_GIRL, text: '先把眼前的安排確認好吧。' };
+  }
+
+  /** Applies one first-chapter choice atomically and preserves second-chapter lock state. */
+  private resolveChapterOneChoice(choiceId: ChapterOneChoiceId): StoryChoiceResult {
+    const route = this.getChapterOneRoute();
+    if (!route) return { success: false, speaker: BUBBLE_GIRL, text: '第一章路線無法辨識。' };
+    const resolution = resolveChapterOneChoice(this.chapterOneState, route, choiceId, this.progress);
+    if (!resolution.success || !resolution.effects || !resolution.nextState) {
+      return { success: false, speaker: BUBBLE_GIRL, text: resolution.text };
+    }
+    this.progress = cloneProgressWithEffects(this.progress, resolution.effects);
+    this.chapterOneState = resolution.nextState;
+    if (resolution.completed) this.stage = 'chapter-one-complete';
+    this.notifyStateChanged();
+    return {
+      success: true,
+      speaker: BUBBLE_GIRL,
+      text: resolution.text,
+      chapterCompleted: resolution.completed,
+      completionLabel: resolution.completed ? CHAPTER_ONE_COMPLETION : undefined,
+    };
+  }
+
+  /** Applies one second-chapter choice atomically without mutating first-chapter history. */
+  private resolveChapterTwoChoice(choiceId: ChapterTwoChoiceId): StoryChoiceResult {
+    const resolution = resolveChapterTwoChoice(
+      this.chapterTwoState,
+      choiceId,
+      this.progress,
+      this.getChapterOneHistory(),
+    );
+    if (!resolution.success || !resolution.effects || !resolution.nextState) {
+      return { success: false, speaker: BUBBLE_GIRL, text: resolution.text };
+    }
+    this.progress = cloneProgressWithEffects(this.progress, resolution.effects);
+    this.chapterTwoState = resolution.nextState;
+    this.stage = resolution.completed
+      ? 'chapter-two-complete'
+      : getChapterTwoStage(this.chapterTwoState.chapterTwoNode);
+    this.notifyStateChanged();
+    return {
+      success: true,
+      speaker: BUBBLE_GIRL,
+      text: resolution.text,
+      chapterCompleted: resolution.completed,
+      completionLabel: resolution.completed ? CHAPTER_TWO_COMPLETION : undefined,
+    };
+  }
+
+  /** Creates detached first-chapter input for all second-chapter conditions and dialogue. */
+  private getChapterOneHistory(): ChapterOneHistoryContext {
+    return {
+      summary: this.getChapterOneSummary(),
+      outcome: this.chapterOneState.chapterOneOutcome,
+      flags: { ...this.chapterOneState.chapterOneFlags },
+    };
+  }
+
+  /** Maps the mutually exclusive first-offer flag to its permanent route. */
+  private getChapterOneRoute(): ChapterOneRoute | undefined {
     if (this.flags.acceptedFirstOffer) return 'accepted-offer';
     if (this.flags.choseTrainingFirst) return 'training-first';
     if (this.flags.negotiatedSmallShow) return 'small-show';
     return undefined;
   }
 
-  /** Emits one complete state after an atomic transition. */
+  /** Emits one complete snapshot after an atomic or narrative transition. */
   private notifyStateChanged(): void {
     this.onStateChanged(this.getState());
   }
+}
+
+/** Copies and applies one bounded effect set before replacing live progression. */
+function cloneProgressWithEffects(progress: PlayerProgress, effects: PlayerProgressEffects): PlayerProgress {
+  const snapshot = progress.getSnapshot();
+  const next = new PlayerProgress(snapshot.playerStats, snapshot.relationships);
+  next.applyEffects(effects);
+  return next;
 }
 
 /** Creates all-false first-offer history for new or repaired saves. */
@@ -381,7 +499,7 @@ function createDefaultStoryFlags(): StoryFlags {
   };
 }
 
-/** Normalizes booleans while keeping identifiers centralized. */
+/** Normalizes first-offer booleans while keeping identifiers centralized. */
 function normalizeStoryFlags(value: unknown): StoryFlags {
   const source = isRecord(value) ? value : {};
   return {
@@ -392,7 +510,7 @@ function normalizeStoryFlags(value: unknown): StoryFlags {
   };
 }
 
-/** Keeps exactly one route flag using definition order as conflict priority. */
+/** Keeps exactly one first route using definition order as conflict priority. */
 function createResolvedFlags(decisionFlag: Exclude<StoryFlagId, 'firstOfferResolved'>): StoryFlags {
   return {
     acceptedFirstOffer: decisionFlag === 'acceptedFirstOffer',
@@ -402,10 +520,30 @@ function createResolvedFlags(decisionFlag: Exclude<StoryFlagId, 'firstOfferResol
   };
 }
 
+/** Identifies the one-shot offer choices. */
 function isFirstOfferChoice(choiceId: StoryChoiceId): choiceId is FirstOfferChoiceId {
   return FIRST_OFFER_CHOICES.some(({ id }) => id === choiceId);
 }
 
+/** Limits first-chapter resolvers to their three distinct route stages. */
+function isChapterOneRouteStage(stage: MainStoryStage): boolean {
+  return stage === 'preparing-show' || stage === 'training-first' || stage === 'small-show';
+}
+
+/** Identifies stages where second-chapter decisions may be resolved. */
+function isChapterTwoActiveStage(stage: MainStoryStage): boolean {
+  return stage === 'chapter-two-intro' || stage === 'agency-offer' ||
+    stage === 'proposal-discussion' || stage === 'creative-choice';
+}
+
+/** Treats every later stage as proof that chapter one was completed. */
+function isPostChapterOneStage(value: unknown): boolean {
+  return value === 'chapter-one-complete' || value === 'chapter-two-intro' ||
+    value === 'agency-offer' || value === 'proposal-discussion' ||
+    value === 'creative-choice' || value === 'chapter-two-complete';
+}
+
+/** Narrows persisted values without treating arrays as story objects. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

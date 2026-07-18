@@ -134,7 +134,7 @@ describe('MainStoryManager first-offer effects', () => {
     expect(onChanged).toHaveBeenCalledTimes(2);
   });
 
-  it('completes a route once and returns route-specific post-chapter dialogue', () => {
+  it('completes a route once and enters history-aware chapter two on next interaction', () => {
     const { manager, onChanged } = createManager();
     manager.resolveFirstOffer('small-show');
     manager.resolveStoryChoice('c-story-format');
@@ -148,8 +148,86 @@ describe('MainStoryManager first-offer effects', () => {
     expect(manager.resolveStoryChoice('c-adapt-safely').success).toBe(false);
     expect(manager.interactWithBubbleGirl()).toMatchObject({
       kind: 'message',
+      text: expect.stringContaining('原創方向'),
+    });
+    expect(onChanged).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('MainStoryManager chapter two integration', () => {
+  /** Completes chapter one through the story route used by integration assertions. */
+  function completeChapterOne(manager: MainStoryManager): void {
+    manager.resolveFirstOffer('train-first');
+    manager.resolveStoryChoice('b-study-audience');
+    manager.resolveStoryChoice('b-refuse-preview');
+  }
+
+  /** Advances the three confirmed opening messages to the first commercial choices. */
+  function advanceChapterTwoOpening(manager: MainStoryManager): void {
+    manager.interactWithBubbleGirl();
+    manager.interactWithBubbleGirl();
+    manager.interactWithBubbleGirl();
+  }
+
+  it('keeps chapter two locked before chapter one completion', () => {
+    const { manager } = createManager();
+    expect(manager.getState().chapterTwoNode).toBe('not-started');
+    expect(manager.resolveStoryChoice('define-values').success).toBe(false);
+  });
+
+  it('advances first chapter history into the chapter-two intro and discussion', () => {
+    const { manager } = createManager();
+    completeChapterOne(manager);
+    expect(manager.getState().mainStoryStage).toBe('chapter-one-complete');
+    const firstChapterFlags = manager.getState().chapterOneFlags;
+
+    expect(manager.interactWithBubbleGirl()).toMatchObject({
+      kind: 'message',
+      text: expect.stringContaining('正式邀約'),
+    });
+    expect(manager.getState()).toMatchObject({
+      mainStoryStage: 'agency-offer',
+      chapterTwoNode: 'agency-first-contact',
+      chapterOneFlags: firstChapterFlags,
+    });
+
+    manager.interactWithBubbleGirl();
+    manager.interactWithBubbleGirl();
+    const discussion = manager.interactWithBubbleGirl();
+    expect(discussion?.kind).toBe('choices');
+    if (discussion?.kind === 'choices') expect(discussion.choices).toHaveLength(3);
+  });
+
+  it('completes chapter two once without changing chapter-one history', () => {
+    const { manager, onChanged } = createManager();
+    completeChapterOne(manager);
+    const firstChapterState = {
+      outcome: manager.getState().chapterOneOutcome,
+      flags: manager.getState().chapterOneFlags,
+    };
+    advanceChapterTwoOpening(manager);
+
+    expect(manager.resolveStoryChoice('prepare-compromise').success).toBe(true);
+    expect(manager.resolveStoryChoice('propose-compromise').success).toBe(true);
+    const completed = manager.resolveStoryChoice('request-paid-preview');
+    expect(completed).toMatchObject({
+      success: true,
+      chapterCompleted: true,
+      completionLabel: '第二章完成：成功的代價',
+    });
+    expect(manager.getState()).toMatchObject({
+      mainStoryStage: 'chapter-two-complete',
+      chapterTwoNode: 'chapter-two-ending',
+      chapterTwoOutcome: 'agencyRespectEarned',
+      chapterOneOutcome: firstChapterState.outcome,
+      chapterOneFlags: firstChapterState.flags,
+    });
+    const notificationCount = onChanged.mock.calls.length;
+    expect(manager.resolveStoryChoice('complete-preview').success).toBe(false);
+    expect(manager.interactWithBubbleGirl()).toMatchObject({
+      kind: 'message',
       text: expect.stringContaining('下一段旅程尚未開放'),
     });
-    expect(onChanged).toHaveBeenCalledTimes(3);
+    expect(onChanged).toHaveBeenCalledTimes(notificationCount);
   });
 });

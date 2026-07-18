@@ -255,9 +255,9 @@ export class HUD {
   }
 
   /** Celebrates chapter completion once at the transition, never during state restore. */
-  public showChapterCompleted(): void {
+  public showChapterCompleted(label: string): void {
     const banner = this.storyObjective.scene.add
-      .text(GAME_WIDTH / 2, CHAPTER_BANNER_Y, '第一章完成  ✦  夢想的第一步', {
+      .text(GAME_WIDTH / 2, CHAPTER_BANNER_Y, label.replace('：', '  ✦  '), {
         color: '#15172c',
         backgroundColor: '#78f0cf',
         fontFamily: 'Noto Sans TC, PingFang TC, sans-serif',

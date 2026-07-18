@@ -173,9 +173,10 @@ describe('migrateSaveData', () => {
     );
     expect(migrated).toMatchObject({
       version: SAVE_VERSION,
-      mainStoryStage: 'chapter-one-complete',
+      mainStoryStage: 'chapter-two-intro',
       chapterOneNode: 'complete',
       chapterOneOutcome: 'legacy-complete',
+      chapterTwoNode: 'intro-review-history',
     });
   });
 
@@ -189,10 +190,11 @@ describe('migrateSaveData', () => {
       TEST_TIMESTAMP,
     );
     expect(migrated).toMatchObject({
-      mainStoryStage: 'chapter-one-complete',
+      mainStoryStage: 'chapter-two-intro',
       storyFlags: { acceptedFirstOffer: true, firstOfferResolved: true },
       chapterOneNode: 'complete',
       chapterOneOutcome: 'legacy-complete',
+      chapterTwoNode: 'intro-review-history',
     });
   });
 
@@ -214,6 +216,101 @@ describe('migrateSaveData', () => {
         smallShowStory: false,
         trainedBasics: false,
       },
+    });
+  });
+
+  it('migrates a completed v5 first chapter into the chapter-two intro', () => {
+    const migrated = migrateSaveData(
+      createSave(5, {
+        studioQuest: { stage: 'completed', investigated: {} },
+        mainStoryStage: 'chapter-one-complete',
+        storyFlags: { choseTrainingFirst: true, firstOfferResolved: true },
+        chapterOneNode: 'complete',
+        chapterOneOutcome: 'held-principle',
+        chapterOneFlags: { studiedAudience: true, refusedFreePreview: true },
+      }),
+      TEST_TIMESTAMP,
+    );
+    expect(migrated).toMatchObject({
+      version: SAVE_VERSION,
+      mainStoryStage: 'chapter-two-intro',
+      chapterOneOutcome: 'held-principle',
+      chapterOneFlags: { studiedAudience: true, refusedFreePreview: true },
+      chapterTwoNode: 'intro-review-history',
+    });
+  });
+
+  it('restores a confirmed v6 discussion choice at the proposal node', () => {
+    const migrated = migrateSaveData(
+      createSave(6, {
+        studioQuest: { stage: 'completed', investigated: {} },
+        mainStoryStage: 'proposal-discussion',
+        storyFlags: { acceptedFirstOffer: true, firstOfferResolved: true },
+        chapterOneNode: 'complete',
+        chapterOneOutcome: 'show-stable',
+        chapterOneFlags: { preparedSafeRoutine: true, keptOriginalAgreement: true },
+        chapterTwoNode: 'proposal-decision',
+        chapterTwoFlags: { definedCoreValuesFirst: true },
+      }),
+      TEST_TIMESTAMP,
+    );
+    expect(migrated).toMatchObject({
+      mainStoryStage: 'creative-choice',
+      chapterTwoNode: 'proposal-decision',
+      chapterTwoFlags: { definedCoreValuesFirst: true },
+      chapterOneOutcome: 'show-stable',
+    });
+  });
+
+  it('normalizes mutually exclusive v6 routes and cross-route final flags', () => {
+    const migrated = migrateSaveData(
+      createSave(6, {
+        studioQuest: { stage: 'completed', investigated: {} },
+        mainStoryStage: 'creative-choice',
+        storyFlags: { acceptedFirstOffer: true, firstOfferResolved: true },
+        chapterOneNode: 'complete',
+        chapterOneOutcome: 'show-stable',
+        chapterTwoNode: 'client-response',
+        chapterTwoFlags: {
+          acceptedAgencyStyle: true,
+          keptOriginalStyle: true,
+          acceptedFinalClientDemand: true,
+          walkedAwayFromAgency: true,
+        },
+      }),
+      TEST_TIMESTAMP,
+    );
+    expect(migrated).toMatchObject({
+      mainStoryStage: 'chapter-two-complete',
+      chapterTwoOutcome: 'commercialBreakthrough',
+      chapterTwoFlags: {
+        acceptedAgencyStyle: true,
+        keptOriginalStyle: false,
+        acceptedFinalClientDemand: true,
+        walkedAwayFromAgency: false,
+      },
+    });
+  });
+
+  it('repairs an abnormal completed v6 chapter with a safe typed outcome', () => {
+    const migrated = migrateSaveData(
+      createSave(6, {
+        studioQuest: { stage: 'completed', investigated: {} },
+        mainStoryStage: 'chapter-two-complete',
+        storyFlags: { negotiatedSmallShow: true, firstOfferResolved: true },
+        chapterOneNode: 'complete',
+        chapterOneOutcome: 'small-show-safe',
+        chapterTwoNode: 'damaged',
+        chapterTwoOutcome: 'wrong',
+        chapterTwoFlags: 'damaged',
+      }),
+      TEST_TIMESTAMP,
+    );
+    expect(migrated).toMatchObject({
+      mainStoryStage: 'chapter-two-complete',
+      chapterTwoNode: 'chapter-two-ending',
+      chapterTwoOutcome: 'commercialCompromise',
+      chapterTwoFlags: { compromisedAgencyStyle: true },
     });
   });
 

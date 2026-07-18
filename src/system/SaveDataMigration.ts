@@ -11,7 +11,7 @@ import {
 } from '../story/MainStoryManager';
 
 /** Current serialized schema version. */
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 
 /** A validated world position; non-finite coordinates never satisfy this shape. */
 export interface PlayerSavePosition {
@@ -42,7 +42,10 @@ export function migrateSaveData(value: unknown, fallbackTimestamp: string): Game
     studioQuest = createDefaultStudioQuestState();
   } else if (value.version === 2) {
     studioQuest = migrateLegacyStudioQuestState(value.studioQuest);
-  } else if (value.version === 3 || value.version === 4 || value.version === SAVE_VERSION) {
+  } else if (
+    value.version === 3 || value.version === 4 || value.version === 5 ||
+    value.version === SAVE_VERSION
+  ) {
     studioQuest = normalizeStudioQuestState(value.studioQuest);
   } else {
     return undefined;
@@ -50,7 +53,7 @@ export function migrateSaveData(value: unknown, fallbackTimestamp: string): Game
 
   const prologueComplete = studioQuest.stage === 'completed';
   const storyState =
-    value.version === 4 || value.version === SAVE_VERSION
+    value.version === 4 || value.version === 5 || value.version === SAVE_VERSION
       ? normalizeMainStoryState(value, prologueComplete)
       : createDefaultMainStoryState(prologueComplete);
   return { ...common, studioQuest, ...storyState };

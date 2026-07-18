@@ -96,6 +96,9 @@ export class StudioScene extends Phaser.Scene {
           chapterOneNode: savedData.chapterOneNode,
           chapterOneOutcome: savedData.chapterOneOutcome,
           chapterOneFlags: savedData.chapterOneFlags,
+          chapterTwoNode: savedData.chapterTwoNode,
+          chapterTwoOutcome: savedData.chapterTwoOutcome,
+          chapterTwoFlags: savedData.chapterTwoFlags,
         }
       : createDefaultMainStoryState(this.questManager.isCompleted());
     this.storyManager = new MainStoryManager(
@@ -325,7 +328,9 @@ export class StudioScene extends Phaser.Scene {
       (choiceId) => {
         const result = this.storyManager.resolveStoryChoice(choiceId);
         this.dialogueSystem.show(`${result.speaker}：${result.text}`);
-        if (result.chapterCompleted) this.hud.showChapterCompleted();
+        if (result.chapterCompleted && result.completionLabel) {
+          this.hud.showChapterCompleted(result.completionLabel);
+        }
       },
     );
   }
