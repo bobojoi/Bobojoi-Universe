@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultStudioQuestState } from '../quest/StudioQuestManager';
+import { createDefaultMainStoryState } from '../story/MainStoryManager';
 import { migrateSaveData, readPlayerPosition, SAVE_VERSION } from './SaveDataMigration';
 
 const TEST_TIMESTAMP = '2026-07-18T00:00:00.000Z';
@@ -41,6 +42,7 @@ describe('migrateSaveData', () => {
       version: SAVE_VERSION,
       player: VALID_PLAYER,
       studioQuest: createDefaultStudioQuestState(),
+      ...createDefaultMainStoryState(false),
       updatedAt: TEST_TIMESTAMP,
     });
   });
@@ -72,6 +74,21 @@ describe('migrateSaveData', () => {
     expect(migrated?.studioQuest.stage).toBe(expectedStage);
   });
 
+  it('migrates a completed v2 save through the current v4 story defaults', () => {
+    const migrated = migrateSaveData(
+      createSave(2, {
+        studioQuest: { stage: 'completed', completed: true, ringCollected: true },
+      }),
+      TEST_TIMESTAMP,
+    );
+    expect(migrated).toMatchObject({
+      version: 4,
+      mainStoryStage: 'first-offer',
+      playerStats: { technique: 10, popularity: 0, conviction: 10, energy: 100 },
+      relationships: { bubbleGirlTrust: 0 },
+    });
+  });
+
   it('normalizes a partial v3 quest without legacy flags', () => {
     const migrated = migrateSaveData(
       createSave(3, { studioQuest: { stage: 'in-progress', investigated: null } }),
@@ -80,6 +97,80 @@ describe('migrateSaveData', () => {
     expect(migrated?.studioQuest).toEqual({
       stage: 'in-progress',
       investigated: { 'prop-box': false, 'bubble-table': false, 'dog-mat': false },
+    });
+    expect(migrated?.mainStoryStage).toBe('prologue');
+  });
+
+  it('migrates a completed v3 tutorial into an available first offer', () => {
+    const migrated = migrateSaveData(
+      createSave(3, {
+        studioQuest: { stage: 'completed', investigated: { 'dog-mat': true } },
+      }),
+      TEST_TIMESTAMP,
+    );
+    expect(migrated).toMatchObject({
+      version: 4,
+      mainStoryStage: 'first-offer',
+      playerStats: { technique: 10, popularity: 0, conviction: 10, energy: 100 },
+      relationships: { bubbleGirlTrust: 0 },
+      storyFlags: { firstOfferResolved: false },
+    });
+  });
+
+  it('normalizes mutually exclusive v4 flags with A then B then C priority', () => {
+    const migrated = migrateSaveData(
+      createSave(4, {
+        studioQuest: { stage: 'completed', investigated: {} },
+        mainStoryStage: 'small-show',
+        playerStats: {},
+        relationships: {},
+        storyFlags: {
+          acceptedFirstOffer: true,
+          choseTrainingFirst: true,
+          negotiatedSmallShow: true,
+          firstOfferResolved: true,
+        },
+      }),
+      TEST_TIMESTAMP,
+    );
+    expect(migrated?.mainStoryStage).toBe('preparing-show');
+    expect(migrated?.storyFlags).toEqual({
+      acceptedFirstOffer: true,
+      choseTrainingFirst: false,
+      negotiatedSmallShow: false,
+      firstOfferResolved: true,
+    });
+  });
+
+  it('repairs a resolved v4 offer without a route back to an understandable offer', () => {
+    const migrated = migrateSaveData(
+      createSave(4, {
+        studioQuest: { stage: 'completed', investigated: {} },
+        mainStoryStage: 'preparing-show',
+        storyFlags: { firstOfferResolved: true },
+      }),
+      TEST_TIMESTAMP,
+    );
+    expect(migrated?.mainStoryStage).toBe('first-offer');
+    expect(migrated?.storyFlags.firstOfferResolved).toBe(false);
+  });
+
+  it('keeps damaged v4 values bounded and behind an incomplete prologue', () => {
+    const migrated = migrateSaveData(
+      createSave(4, {
+        studioQuest: { stage: 'in-progress', investigated: null },
+        mainStoryStage: 'small-show',
+        playerStats: { technique: Number.POSITIVE_INFINITY, energy: -50 },
+        relationships: { bubbleGirlTrust: 900 },
+        storyFlags: 'damaged',
+      }),
+      TEST_TIMESTAMP,
+    );
+    expect(migrated).toMatchObject({
+      mainStoryStage: 'prologue',
+      playerStats: { technique: 10, popularity: 0, conviction: 10, energy: 0 },
+      relationships: { bubbleGirlTrust: 100 },
+      storyFlags: { firstOfferResolved: false },
     });
   });
 

@@ -10,6 +10,12 @@ import {
   type StudioQuestInteractionResult,
 } from '../quest/StudioQuestManager';
 import { StudioQuestWorldController } from '../quest/StudioQuestWorldController';
+import {
+  createDefaultMainStoryState,
+  MainStoryManager,
+  type FirstOfferChoiceId,
+  type StoryInteraction,
+} from '../story/MainStoryManager';
 import { DialogueSystem } from '../system/DialogueSystem';
 import { InteractionSystem } from '../system/InteractionSystem';
 import { SaveSystem } from '../system/SaveSystem';
@@ -61,6 +67,7 @@ export class StudioScene extends Phaser.Scene {
   private saveSystem!: SaveSystem;
   private questManager!: StudioQuestManager;
   private questWorldController!: StudioQuestWorldController;
+  private storyManager!: MainStoryManager;
   private hud!: HUD;
   private bubbleDog!: BubbleDog;
   private starRing!: Phaser.GameObjects.Container;
@@ -80,6 +87,19 @@ export class StudioScene extends Phaser.Scene {
       savedData?.studioQuest ?? createDefaultStudioQuestState(),
       () => this.handleQuestStateChanged(),
     );
+    const initialStoryState = savedData
+      ? {
+          mainStoryStage: savedData.mainStoryStage,
+          playerStats: savedData.playerStats,
+          relationships: savedData.relationships,
+          storyFlags: savedData.storyFlags,
+        }
+      : createDefaultMainStoryState(this.questManager.isCompleted());
+    this.storyManager = new MainStoryManager(
+      initialStoryState,
+      () => this.questManager.isCompleted(),
+      () => this.handleStoryStateChanged(),
+    );
 
     const controls = this.createControls();
     const savedPosition = savedData?.player;
@@ -97,6 +117,7 @@ export class StudioScene extends Phaser.Scene {
 
     this.dialogueSystem = new DialogueSystem(this);
     this.hud = new HUD(this);
+    this.refreshPlayerProgressHud();
     this.questWorldController = new StudioQuestWorldController(this.questManager, {
       bubbleDog: this.bubbleDog,
       starRing: this.starRing,
@@ -108,7 +129,7 @@ export class StudioScene extends Phaser.Scene {
     this.interactionSystem.register({
       target: bubbleGirl,
       prompt: '和泡妞說話',
-      onInteract: () => this.handleQuestInteraction(this.questManager.interactWithBubbleGirl()),
+      onInteract: () => this.interactWithBubbleGirl(),
     });
     this.interactionSystem.register({
       target: this.bubbleDog,
@@ -142,13 +163,20 @@ export class StudioScene extends Phaser.Scene {
   }
 
   public update(): void {
-    this.player.updateMovement();
-
     // R is a development-only restart hook for repeatable lifecycle regression checks.
     if (this.restartKey && Phaser.Input.Keyboard.JustDown(this.restartKey)) {
       this.scene.restart();
       return;
     }
+
+    if (this.dialogueSystem.isChoosing()) {
+      this.player.updateMovement(false);
+      this.hud.setInteractionPrompt();
+      this.dialogueSystem.update();
+      return;
+    }
+
+    this.player.updateMovement();
 
     const interaction = this.interactionSystem.getNearest();
     this.hud.setInteractionPrompt(
@@ -271,10 +299,49 @@ export class StudioScene extends Phaser.Scene {
     this.questWorldController.applyInteraction(result);
   }
 
+  /** Routes BubbleGirl interaction to the tutorial until the main story unlocks. */
+  private interactWithBubbleGirl(): void {
+    const storyInteraction = this.storyManager.interactWithBubbleGirl();
+    if (!storyInteraction) {
+      this.handleQuestInteraction(this.questManager.interactWithBubbleGirl());
+      return;
+    }
+    this.handleStoryInteraction(storyInteraction);
+  }
+
+  /** Presents structured story copy and resolves choices through pure story logic. */
+  private handleStoryInteraction(interaction: StoryInteraction): void {
+    if (interaction.kind === 'message') {
+      this.dialogueSystem.show(`${interaction.speaker}：${interaction.text}`);
+      return;
+    }
+
+    this.dialogueSystem.showChoices<FirstOfferChoiceId>(
+      { speaker: interaction.speaker, text: interaction.text },
+      interaction.choices,
+      (choiceId) => {
+        const result = this.storyManager.resolveFirstOffer(choiceId);
+        this.dialogueSystem.show(`${result.speaker}：${result.text}`);
+      },
+    );
+  }
+
   /** Refreshes derived HUD content and persists every meaningful quest transition. */
   private handleQuestStateChanged(): void {
     this.questWorldController.refreshHud();
     this.saveProgress();
+  }
+
+  /** Updates character values and saves one complete story transition. */
+  private handleStoryStateChanged(): void {
+    this.refreshPlayerProgressHud();
+    this.saveProgress();
+  }
+
+  /** Maps the story manager snapshot into the compact character-status HUD. */
+  private refreshPlayerProgressHud(): void {
+    const state = this.storyManager.getState();
+    this.hud.setPlayerProgress(state.playerStats, state.relationships);
   }
 
   /** Creates keyboard controls in one place for later remapping support. */
@@ -362,6 +429,7 @@ export class StudioScene extends Phaser.Scene {
     this.saveSystem.save(
       { x: this.player.x, y: this.player.y },
       this.questManager.getState(),
+      this.storyManager.getState(),
     );
   }
 

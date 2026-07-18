@@ -2,6 +2,7 @@ import {
   normalizeStudioQuestState,
   type StudioQuestState,
 } from '../quest/StudioQuestManager';
+import { normalizeMainStoryState, type MainStoryState } from '../story/MainStoryManager';
 import { migrateSaveData, SAVE_VERSION, type GameSaveData } from './SaveDataMigration';
 
 const SAVE_KEY = 'bobojoi-universe-save';
@@ -9,11 +10,17 @@ const SAVE_KEY = 'bobojoi-universe-save';
 /** Wraps browser persistence so gameplay code never touches localStorage directly. */
 export class SaveSystem {
   /** Persists a defensive, versioned snapshot. */
-  public save(playerPosition: { x: number; y: number }, studioQuest: StudioQuestState): void {
+  public save(
+    playerPosition: { x: number; y: number },
+    studioQuest: StudioQuestState,
+    mainStory: MainStoryState,
+  ): void {
+    const normalizedQuest = normalizeStudioQuestState(studioQuest);
     const data: GameSaveData = {
       version: SAVE_VERSION,
       player: { ...playerPosition },
-      studioQuest: normalizeStudioQuestState(studioQuest),
+      studioQuest: normalizedQuest,
+      ...normalizeMainStoryState(mainStory, normalizedQuest.stage === 'completed'),
       updatedAt: new Date().toISOString(),
     };
 

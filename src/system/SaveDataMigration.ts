@@ -4,9 +4,14 @@ import {
   normalizeStudioQuestState,
   type StudioQuestState,
 } from '../quest/StudioQuestManager';
+import {
+  createDefaultMainStoryState,
+  normalizeMainStoryState,
+  type MainStoryState,
+} from '../story/MainStoryManager';
 
 /** Current serialized schema version. */
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 
 /** A validated world position; non-finite coordinates never satisfy this shape. */
 export interface PlayerSavePosition {
@@ -15,7 +20,7 @@ export interface PlayerSavePosition {
 }
 
 /** Loaded data may omit an invalid player position so the scene uses its defaults. */
-export interface GameSaveData {
+export interface GameSaveData extends MainStoryState {
   version: typeof SAVE_VERSION;
   player?: PlayerSavePosition;
   studioQuest: StudioQuestState;
@@ -32,19 +37,23 @@ export function migrateSaveData(value: unknown, fallbackTimestamp: string): Game
     updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : fallbackTimestamp,
   } as const;
 
+  let studioQuest: StudioQuestState;
   if (value.version === 1) {
-    return { ...common, studioQuest: createDefaultStudioQuestState() };
+    studioQuest = createDefaultStudioQuestState();
+  } else if (value.version === 2) {
+    studioQuest = migrateLegacyStudioQuestState(value.studioQuest);
+  } else if (value.version === 3 || value.version === SAVE_VERSION) {
+    studioQuest = normalizeStudioQuestState(value.studioQuest);
+  } else {
+    return undefined;
   }
 
-  if (value.version === 2) {
-    return { ...common, studioQuest: migrateLegacyStudioQuestState(value.studioQuest) };
-  }
-
-  if (value.version === SAVE_VERSION) {
-    return { ...common, studioQuest: normalizeStudioQuestState(value.studioQuest) };
-  }
-
-  return undefined;
+  const prologueComplete = studioQuest.stage === 'completed';
+  const storyState =
+    value.version === SAVE_VERSION
+      ? normalizeMainStoryState(value, prologueComplete)
+      : createDefaultMainStoryState(prologueComplete);
+  return { ...common, studioQuest, ...storyState };
 }
 
 /** Accepts coordinates only when both values are finite JavaScript numbers. */

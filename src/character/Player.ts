@@ -30,7 +30,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   }
 
   /** Applies normalized velocity so diagonal movement is not faster. */
-  public updateMovement(): void {
+  public updateMovement(enabled = true): void {
+    if (!enabled) {
+      this.setVelocity(0, 0);
+      return;
+    }
+
     const horizontal = Number(this.controls.right.isDown) - Number(this.controls.left.isDown);
     const vertical = Number(this.controls.down.isDown) - Number(this.controls.up.isDown);
     const direction = new Phaser.Math.Vector2(horizontal, vertical).normalize();

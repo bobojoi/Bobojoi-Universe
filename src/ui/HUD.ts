@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { GAME_WIDTH } from '../config/gameConfig';
 import { COLORS, DEPTH } from '../constants/GameConstants';
 import type { StudioQuestHudView } from '../quest/StudioQuestManager';
+import type { PlayerStatsState, RelationshipState } from '../story/PlayerProgress';
 
 const TITLE_X = 32;
 const TITLE_Y = 28;
@@ -17,6 +18,12 @@ const QUEST_PADDING = 20;
 const QUEST_RADIUS = 16;
 const COMPLETE_BANNER_Y = 154;
 const COMPLETE_BANNER_DURATION_MS = 2600;
+const STATUS_X = 32;
+const STATUS_Y = 88;
+const STATUS_WIDTH = 226;
+const STATUS_HEIGHT = 118;
+const STATUS_PADDING = 16;
+const STATUS_RADIUS = 14;
 
 /** Displays fixed player guidance independently of world-camera movement. */
 export class HUD {
@@ -25,6 +32,7 @@ export class HUD {
   private readonly questBackground: Phaser.GameObjects.Graphics;
   private readonly questTitle: Phaser.GameObjects.Text;
   private readonly questObjective: Phaser.GameObjects.Text;
+  private readonly statusValues: Phaser.GameObjects.Text;
 
   public constructor(scene: Phaser.Scene) {
     scene.add
@@ -80,8 +88,54 @@ export class HUD {
       .setScrollFactor(0)
       .setDepth(DEPTH.UI + 1);
 
+    const statusBackground = scene.add.graphics().setScrollFactor(0).setDepth(DEPTH.UI);
+    statusBackground.fillStyle(COLORS.PANEL, 0.88);
+    statusBackground.fillRoundedRect(
+      STATUS_X,
+      STATUS_Y,
+      STATUS_WIDTH,
+      STATUS_HEIGHT,
+      STATUS_RADIUS,
+    );
+    statusBackground.lineStyle(1, COLORS.MINT, 0.42);
+    statusBackground.strokeRoundedRect(
+      STATUS_X,
+      STATUS_Y,
+      STATUS_WIDTH,
+      STATUS_HEIGHT,
+      STATUS_RADIUS,
+    );
+    scene.add
+      .text(STATUS_X + STATUS_PADDING, STATUS_Y + 12, 'CAST STATUS', {
+        color: '#78f0cf',
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '11px',
+        fontStyle: 'bold',
+        letterSpacing: 2,
+      })
+      .setScrollFactor(0)
+      .setDepth(DEPTH.UI + 1);
+    this.statusValues = scene.add
+      .text(STATUS_X + STATUS_PADDING, STATUS_Y + 35, '', {
+        color: '#f8f5ff',
+        fontFamily: 'Noto Sans TC, PingFang TC, sans-serif',
+        fontSize: '14px',
+        lineSpacing: 7,
+      })
+      .setScrollFactor(0)
+      .setDepth(DEPTH.UI + 1);
+
     this.setInteractionPrompt();
     this.setQuest();
+  }
+
+  /** Updates the compact cast card immediately after a story effect. */
+  public setPlayerProgress(stats: PlayerStatsState, relationships: RelationshipState): void {
+    this.statusValues.setText([
+      `技藝 ${formatStat(stats.technique)}　人氣 ${formatStat(stats.popularity)}`,
+      `信念 ${formatStat(stats.conviction)}　體力 ${formatStat(stats.energy)}`,
+      `泡妞信任 ${formatSignedStat(relationships.bubbleGirlTrust)}`,
+    ]);
   }
 
   /** Shows or hides the contextual E-key interaction prompt. */
@@ -142,4 +196,14 @@ export class HUD {
       onComplete: () => banner.destroy(),
     });
   }
+}
+
+/** Aligns bounded values for a stable compact HUD rhythm. */
+function formatStat(value: number): string {
+  return String(value).padStart(3, ' ');
+}
+
+/** Makes relationship direction legible at a glance. */
+function formatSignedStat(value: number): string {
+  return value > 0 ? `+${value}` : String(value);
 }
