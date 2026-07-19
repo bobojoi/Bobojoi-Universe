@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { GAME_HEIGHT, GAME_WIDTH } from '../config/gameConfig';
 import { CHARACTER_ASSET_PATHS } from '../constants/CharacterVisualConstants';
 import { COLORS, SCENE_KEYS, TEXTURE_KEYS } from '../constants/GameConstants';
+import { MUSIC_TRACKS } from '../audio/MusicCatalog';
 
 const PROGRESS_BAR_WIDTH = 420;
 const PROGRESS_BAR_HEIGHT = 12;
@@ -58,6 +59,11 @@ export class PreloadScene extends Phaser.Scene {
     this.load.image(TEXTURE_KEYS.BUBBLE_GIRL_SIDE, CHARACTER_ASSET_PATHS.GIRL_SIDE);
     this.load.image(TEXTURE_KEYS.BUBBLE_DOG_FRONT, CHARACTER_ASSET_PATHS.DOG_FRONT);
     this.load.image(TEXTURE_KEYS.BUBBLE_DOG_SIDE, CHARACTER_ASSET_PATHS.DOG_SIDE);
+
+    // User-owned Bobojoi tracks are decoded once and reused by the global music director.
+    for (const track of Object.values(MUSIC_TRACKS)) {
+      this.load.audio(track.key, track.path);
+    }
 
     // A tiny sentinel keeps the loader lifecycle observable even from a warm cache.
     this.load.image('loading-sentinel', this.createTransparentPixel());

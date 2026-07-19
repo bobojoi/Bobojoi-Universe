@@ -16,6 +16,14 @@ export const TEXTURE_KEYS = {
   BUBBLE_DOG_SIDE: 'bubble-dog-side',
 } as const;
 
+/** Stable audio keys keep scene code independent of file names and track metadata. */
+export const AUDIO_KEYS = {
+  TITLE: 'bgm-title-floating-ring',
+  STUDIO: 'bgm-studio-bubble-realm',
+  MISSION: 'bgm-mission-starlight',
+  PERFORMANCE: 'bgm-performance-bubble-show',
+} as const;
+
 /** Shared visual colors keep programmatic art consistent. */
 export const COLORS = {
   NIGHT: 0x10132f,
@@ -27,6 +35,12 @@ export const COLORS = {
   WHITE: 0xf8f5ff,
   INK: 0x15172c,
   PANEL: 0x171a39,
+  WALL: 0x4a4059,
+  WALL_SHADOW: 0x342f49,
+  WOOD: 0x9a6748,
+  WOOD_DARK: 0x70442f,
+  CREAM: 0xffedcf,
+  LEAF: 0x4d9b75,
 } as const;
 
 /** Layer depths define a predictable rendering contract for future scenes. */

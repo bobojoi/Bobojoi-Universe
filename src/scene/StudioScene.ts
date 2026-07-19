@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { MusicDirector } from '../audio/MusicDirector';
 import { BubbleDog } from '../character/BubbleDog';
 import type { WorldPoint } from '../character/BubbleDogPositioning';
 import { BubbleGirl } from '../character/BubbleGirl';
@@ -6,6 +7,7 @@ import { Player, type PlayerControls } from '../character/Player';
 import { GAME_WIDTH } from '../config/gameConfig';
 import { getWorldDepth } from '../constants/CharacterVisualConstants';
 import { COLORS, DEPTH, SCENE_KEYS } from '../constants/GameConstants';
+import { getCurrentMissionCard, type MissionCardView } from '../mission/MissionCatalog';
 import {
   getProgressPresentation,
 } from '../presentation/ProgressPresentation';
@@ -28,6 +30,7 @@ import {
   pickNonRepeatingIndex,
   type LivingStudioProp,
 } from '../studio/LivingStudioContent';
+import { StudioEnvironment } from '../studio/StudioEnvironment';
 import { DialogueSystem } from '../system/DialogueSystem';
 import { InteractionSystem } from '../system/InteractionSystem';
 import { SaveSystem } from '../system/SaveSystem';
@@ -37,6 +40,7 @@ import {
   type TutorialProgressState,
 } from '../tutorial/TutorialProgress';
 import { HUD } from '../ui/HUD';
+import { MissionBoard } from '../ui/MissionBoard';
 
 const WORLD_WIDTH = 2200;
 const WORLD_HEIGHT = 1400;
@@ -59,14 +63,6 @@ const CAMERA_LERP = 0.09;
 const CAMERA_ZOOM = 1;
 const CAMERA_DEADZONE_WIDTH = 160;
 const CAMERA_DEADZONE_HEIGHT = 100;
-const GRID_SIZE = 100;
-const BUBBLE_COUNT = 18;
-const BUBBLE_MIN_RADIUS = 10;
-const BUBBLE_MAX_RADIUS = 38;
-const BUBBLE_MIN_ALPHA = 0.08;
-const BUBBLE_MAX_ALPHA = 0.22;
-const BUBBLE_FLOAT_DISTANCE = 18;
-const BUBBLE_FLOAT_DURATION_MS = 1800;
 const AUTO_SAVE_INTERVAL_MS = 5000;
 const PROP_WIDTH = 150;
 const PROP_HEIGHT = 82;
@@ -104,8 +100,10 @@ export class StudioScene extends Phaser.Scene {
   private ambientText!: Phaser.GameObjects.Text;
   private lastAmbientMessageIndex = -1;
   private guidanceController!: StudioGuidanceController;
+  private missionBoard!: MissionBoard;
   private tutorialProgress!: TutorialProgressState;
   private lastSaveSucceeded = true;
+  private sceneTransitioning = false;
 
   public constructor() {
     super(SCENE_KEYS.STUDIO);
@@ -113,7 +111,7 @@ export class StudioScene extends Phaser.Scene {
 
   public create(): void {
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-    this.drawStudio();
+    const environment = new StudioEnvironment(this, WORLD_WIDTH, WORLD_HEIGHT).create();
 
     this.saveSystem = new SaveSystem();
     const savedData = this.saveSystem.load();
@@ -162,6 +160,7 @@ export class StudioScene extends Phaser.Scene {
       investigationTargets.bubbleTable,
       investigationTargets.dogMat,
       this.starRing,
+      environment.missionBoardTarget,
       ...livingStudioTargets.map(({ target }) => target),
     ];
     this.ambientText = this.createAmbientText();
@@ -187,6 +186,11 @@ export class StudioScene extends Phaser.Scene {
       hud: this.hud,
     });
     this.questWorldController.synchronizeFromState();
+    this.missionBoard = new MissionBoard(this, {
+      getMission: () =>
+        getCurrentMissionCard(this.questManager.getState(), this.storyManager.getState()),
+      onStartMission: (mission) => this.handleMissionDeparture(mission),
+    });
     this.interactionSystem = new InteractionSystem(this.player);
     this.interactionSystem.register({
       target: this.bubbleGirl,
@@ -197,6 +201,11 @@ export class StudioScene extends Phaser.Scene {
       target: this.bubbleDog,
       prompt: '摸摸泡彈',
       onInteract: () => this.dialogueSystem.show(this.bubbleDog.playInteraction()),
+    });
+    this.interactionSystem.register({
+      target: environment.missionBoardTarget,
+      prompt: '查看任務製作板',
+      onInteract: () => this.missionBoard.open(),
     });
     this.registerInvestigationTarget(investigationTargets.propBox, 'prop-box', '調查道具箱');
     this.registerInvestigationTarget(
@@ -216,6 +225,8 @@ export class StudioScene extends Phaser.Scene {
     }
 
     this.configureCamera();
+    this.cameras.main.fadeIn(620, 16, 19, 47);
+    MusicDirector.play(this, 'studio');
     this.autoSaveTimer = this.time.addEvent({
       delay: AUTO_SAVE_INTERVAL_MS,
       loop: true,
@@ -238,10 +249,20 @@ export class StudioScene extends Phaser.Scene {
       return;
     }
 
+    if (this.sceneTransitioning) {
+      this.player.updateMovement(false);
+      this.hud.setInteractionPrompt();
+      return;
+    }
+
+    this.missionBoard.update();
+
     // Character life continues independently of player input and story progression.
     this.bubbleDog.updateActivity(this.player, {
       playerBusy:
-        this.guidanceController.isBlockingInput() || this.dialogueSystem.isActive(),
+        this.guidanceController.isBlockingInput() ||
+        this.dialogueSystem.isActive() ||
+        this.missionBoard.isOpen(),
       blockedPositions: this.bubbleDogBlockedPositions,
       worldBounds: {
         width: WORLD_WIDTH,
@@ -250,6 +271,12 @@ export class StudioScene extends Phaser.Scene {
       },
     });
     this.bubbleGirl.updateActivity(this.player);
+
+    if (this.missionBoard.isOpen()) {
+      this.player.updateMovement(false);
+      this.hud.setInteractionPrompt();
+      return;
+    }
 
     if (this.guidanceController.isBlockingInput()) {
       this.player.updateMovement(false);
@@ -266,8 +293,7 @@ export class StudioScene extends Phaser.Scene {
     }
 
     if (Phaser.Input.Keyboard.JustDown(this.escapeKey)) {
-      this.saveProgress();
-      this.scene.start(SCENE_KEYS.TITLE);
+      this.returnToTitle();
       return;
     }
 
@@ -395,35 +421,34 @@ export class StudioScene extends Phaser.Scene {
     return { propBox, bubbleTable, dogMat };
   }
 
-  /** Builds one readable placeholder prop without introducing texture dependencies. */
+  /** Adds a compact interaction plaque while illustrated furniture carries the object silhouette. */
   private createLabeledProp(
     x: number,
     y: number,
     label: string,
     color: number,
   ): Phaser.GameObjects.Container {
-    const shape = this.add
-      .rectangle(0, 0, PROP_WIDTH, PROP_HEIGHT, COLORS.PANEL, 0.9)
-      .setStrokeStyle(3, color, 0.8);
-    const accent = this.add.rectangle(
-      0,
-      -PROP_HEIGHT / 2 + 12,
-      PROP_WIDTH - 22,
-      6,
-      color,
-      0.8,
-    );
+    const plaque = this.add.graphics();
+    plaque.fillStyle(0x090b1d, 0.45);
+    plaque.fillRoundedRect(-PROP_WIDTH / 2 + 4, PROP_LABEL_OFFSET_Y - 14, PROP_WIDTH, 36, 12);
+    plaque.fillStyle(COLORS.PANEL, 0.88);
+    plaque.fillRoundedRect(-PROP_WIDTH / 2, PROP_LABEL_OFFSET_Y - 18, PROP_WIDTH, 36, 12);
+    plaque.lineStyle(2, color, 0.72);
+    plaque.strokeRoundedRect(-PROP_WIDTH / 2, PROP_LABEL_OFFSET_Y - 18, PROP_WIDTH, 36, 12);
+    plaque.fillStyle(color, 0.9);
+    plaque.fillCircle(-PROP_WIDTH / 2 + 17, PROP_LABEL_OFFSET_Y, 5);
     const labelText = this.add
-      .text(0, 2, label, {
+      .text(8, PROP_LABEL_OFFSET_Y, label, {
         color: '#f8f5ff',
         fontFamily: 'Noto Sans TC, PingFang TC, sans-serif',
-        fontSize: '17px',
+        fontSize: '14px',
         fontStyle: 'bold',
       })
       .setOrigin(0.5);
 
     return this.add
-      .container(x, y, [shape, accent, labelText])
+      .container(x, y, [plaque, labelText])
+      .setSize(PROP_WIDTH, PROP_HEIGHT + PROP_LABEL_OFFSET_Y)
       .setDepth(getWorldDepth(y));
   }
 
@@ -515,6 +540,19 @@ export class StudioScene extends Phaser.Scene {
     }
   }
 
+  /** Uses the departure confirmation as a short production transition, not a new game mode. */
+  private handleMissionDeparture(mission: MissionCardView): void {
+    if (this.sceneTransitioning) return;
+    this.sceneTransitioning = true;
+    this.cameras.main.fadeOut(620, 16, 19, 47);
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+      MusicDirector.play(this, 'studio');
+      this.dialogueSystem.show(`任務製作板：${mission.actionHint}`);
+      this.cameras.main.fadeIn(620, 16, 19, 47);
+      this.sceneTransitioning = false;
+    });
+  }
+
   /** Refreshes derived HUD content and persists every meaningful quest transition. */
   private handleQuestStateChanged(): void {
     this.questWorldController.refreshHud();
@@ -573,56 +611,16 @@ export class StudioScene extends Phaser.Scene {
     this.cameras.main.setDeadzone(CAMERA_DEADZONE_WIDTH, CAMERA_DEADZONE_HEIGHT);
   }
 
-  /** Draws a deterministic studio floor and an ambient bubble constellation. */
-  private drawStudio(): void {
-    const background = this.add.graphics().setDepth(DEPTH.BACKGROUND);
-    background.fillStyle(COLORS.NIGHT, 1);
-    background.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-    background.fillStyle(COLORS.FLOOR, 1);
-    background.fillRoundedRect(120, 120, WORLD_WIDTH - 240, WORLD_HEIGHT - 240, 48);
-
-    background.lineStyle(1, COLORS.FLOOR_LINE, 0.38);
-    for (let x = 120; x <= WORLD_WIDTH - 120; x += GRID_SIZE) {
-      background.lineBetween(x, 120, x, WORLD_HEIGHT - 120);
-    }
-    for (let y = 120; y <= WORLD_HEIGHT - 120; y += GRID_SIZE) {
-      background.lineBetween(120, y, WORLD_WIDTH - 120, y);
-    }
-
-    // Seeded positions keep the room stable while still feeling organic.
-    const random = new Phaser.Math.RandomDataGenerator(['bobojoi-studio-01']);
-    for (let index = 0; index < BUBBLE_COUNT; index += 1) {
-      const radius = random.between(BUBBLE_MIN_RADIUS, BUBBLE_MAX_RADIUS);
-      const bubble = this.add
-        .circle(
-          random.between(radius, WORLD_WIDTH - radius),
-          random.between(radius, WORLD_HEIGHT - radius),
-          radius,
-          index % 2 === 0 ? COLORS.MINT : COLORS.PINK,
-          random.realInRange(BUBBLE_MIN_ALPHA, BUBBLE_MAX_ALPHA),
-        )
-        .setStrokeStyle(2, COLORS.WHITE, 0.16)
-        .setDepth(DEPTH.WORLD_DECORATION);
-
-      this.tweens.add({
-        targets: bubble,
-        y: bubble.y - BUBBLE_FLOAT_DISTANCE,
-        duration: BUBBLE_FLOAT_DURATION_MS + random.between(0, BUBBLE_FLOAT_DURATION_MS),
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.inOut',
-      });
-    }
-
-    this.add
-      .text(WORLD_WIDTH / 2, 220, '泡 泡 工 作 室', {
-        color: '#6f75ae',
-        fontFamily: 'Arial Black, sans-serif',
-        fontSize: '54px',
-        letterSpacing: 14,
-      })
-      .setOrigin(0.5)
-      .setDepth(DEPTH.WORLD_DECORATION);
+  /** Fades camera and music together before handing control back to the title scene. */
+  private returnToTitle(): void {
+    if (this.sceneTransitioning) return;
+    this.sceneTransitioning = true;
+    this.saveProgress();
+    MusicDirector.play(this, 'title');
+    this.cameras.main.fadeOut(540, 16, 19, 47);
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+      this.scene.start(SCENE_KEYS.TITLE);
+    });
   }
 
   /** Captures player position without blocking the render loop. */
@@ -644,5 +642,6 @@ export class StudioScene extends Phaser.Scene {
     this.tweens.killTweensOf(this.ambientText);
     this.dialogueSystem.destroy();
     this.guidanceController.destroy();
+    this.missionBoard.destroy();
   }
 }

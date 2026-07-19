@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { MusicDirector } from '../audio/MusicDirector';
 import { GAME_HEIGHT, GAME_WIDTH } from '../config/gameConfig';
 import { COLORS, DEPTH, SCENE_KEYS } from '../constants/GameConstants';
 import { getContinueSummary } from '../presentation/ProgressPresentation';
@@ -29,6 +30,7 @@ export class TitleScene extends Phaser.Scene {
   private dynamicObjects: Phaser.GameObjects.GameObject[] = [];
   private statusText!: Phaser.GameObjects.Text;
   private summary: string[] = [];
+  private sceneTransitioning = false;
 
   public constructor() {
     super(SCENE_KEYS.TITLE);
@@ -51,9 +53,12 @@ export class TitleScene extends Phaser.Scene {
       .setDepth(DEPTH.UI + 2);
     this.createControls();
     this.renderMenu();
+    this.cameras.main.fadeIn(620, 16, 19, 47);
+    MusicDirector.play(this, 'title');
   }
 
   public update(): void {
+    if (this.sceneTransitioning) return;
     if (this.wasJustPressed(this.upKeys)) {
       this.menu.move(-1);
       this.renderMenu();
@@ -275,9 +280,29 @@ export class TitleScene extends Phaser.Scene {
     ).setOrigin(0, 0.5);
     this.dynamicObjects.push(background);
     if (enabled) {
-      text.setInteractive({ useHandCursor: true }).on('pointerdown', () => {
-        this.processAction(this.menu.confirm(id));
-      });
+      const hitArea = this.add
+        .rectangle(x, y, width, MENU_ROW_HEIGHT, COLORS.WHITE, 0.001)
+        .setOrigin(0)
+        .setDepth(DEPTH.UI + 2)
+        .setInteractive({ useHandCursor: true })
+        .on('pointerover', () => {
+          background.setAlpha(0.86);
+          text.setColor('#78f0cf');
+          this.tweens.add({ targets: text, scale: 1.035, duration: 110 });
+        })
+        .on('pointerout', () => {
+          background.setAlpha(1);
+          text.setColor(selected ? '#78f0cf' : '#f8f5ff');
+          this.tweens.add({ targets: text, scale: 1, duration: 110 });
+        })
+        .on('pointerdown', () => {
+          this.tweens.add({ targets: text, scale: 0.965, duration: 70 });
+        })
+        .on('pointerup', () => {
+          this.tweens.add({ targets: text, scale: 1, duration: 90 });
+          this.processAction(this.menu.confirm(id));
+        });
+      this.dynamicObjects.push(hitArea);
     }
   }
 
@@ -288,7 +313,7 @@ export class TitleScene extends Phaser.Scene {
       return;
     }
     if (action === 'continue-game') {
-      this.scene.start(SCENE_KEYS.STUDIO);
+      this.transitionToStudio();
       return;
     }
     if (action === 'start-new-game') {
@@ -296,7 +321,7 @@ export class TitleScene extends Phaser.Scene {
         this.statusText.setText('無法建立新進度，請確認瀏覽器儲存空間。');
         return;
       }
-      this.scene.start(SCENE_KEYS.STUDIO, { newGame: true });
+      this.transitionToStudio({ newGame: true });
       return;
     }
     const cleared = this.saveSystem.clear();
@@ -308,6 +333,17 @@ export class TitleScene extends Phaser.Scene {
     } else {
       this.statusText.setText('清除失敗，請確認瀏覽器儲存空間。');
     }
+  }
+
+  /** Couples camera and music fades so entering the studio feels like one handoff. */
+  private transitionToStudio(data?: { newGame: boolean }): void {
+    if (this.sceneTransitioning) return;
+    this.sceneTransitioning = true;
+    MusicDirector.play(this, 'studio');
+    this.cameras.main.fadeOut(620, 16, 19, 47);
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+      this.scene.start(SCENE_KEYS.STUDIO, data);
+    });
   }
 
   private createControls(): void {

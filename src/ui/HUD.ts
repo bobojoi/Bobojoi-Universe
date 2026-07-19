@@ -55,7 +55,7 @@ export class HUD {
       .setDepth(DEPTH.UI);
 
     scene.add
-      .text(TITLE_X, TITLE_Y + 28, 'WASD 移動 · E 互動 · Esc 主選單', {
+      .text(TITLE_X, TITLE_Y + 28, 'WASD 移動 · E 互動 · M 任務 · Esc 主選單', {
         color: '#b8b9d9',
         fontFamily: 'Noto Sans TC, PingFang TC, sans-serif',
         fontSize: '15px',
