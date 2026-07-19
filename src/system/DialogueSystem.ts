@@ -1,13 +1,19 @@
 import Phaser from 'phaser';
 import { GAME_HEIGHT, GAME_WIDTH } from '../config/gameConfig';
 import { COLORS, DEPTH } from '../constants/GameConstants';
+import { paginateDialogueLines, parseDialogueMessage } from './DialoguePagination';
 
-const PANEL_WIDTH = 760;
-const PANEL_HEIGHT = 112;
-const PANEL_MARGIN_BOTTOM = 42;
-const PANEL_PADDING_X = 34;
+const PANEL_WIDTH = 820;
+const PANEL_HEIGHT = 154;
+const PANEL_MARGIN_BOTTOM = 30;
+const PANEL_PADDING_X = 42;
+const PANEL_PADDING_Y = 22;
 const PANEL_RADIUS = 18;
-const MESSAGE_DURATION_MS = 3200;
+const MESSAGE_PAGE_DURATION_MS = 3600;
+const MESSAGE_FONT_SIZE = 21;
+const MESSAGE_LINE_SPACING = 6;
+const MESSAGE_LINES_PER_PAGE = 3;
+const SPEAKER_BODY_GAP = 12;
 const CHOICE_PANEL_WIDTH = 840;
 const CHOICE_PANEL_HEIGHT = 382;
 const CHOICE_PANEL_MARGIN_BOTTOM = 24;
@@ -37,7 +43,9 @@ export interface ChoiceDialogue {
 export class DialogueSystem {
   private readonly scene: Phaser.Scene;
   private readonly panel: Phaser.GameObjects.Graphics;
+  private readonly messageSpeaker: Phaser.GameObjects.Text;
   private readonly message: Phaser.GameObjects.Text;
+  private readonly messagePageHint: Phaser.GameObjects.Text;
   private readonly choicePanel: Phaser.GameObjects.Graphics;
   private readonly choiceSpeaker: Phaser.GameObjects.Text;
   private readonly choicePrompt: Phaser.GameObjects.Text;
@@ -51,6 +59,8 @@ export class DialogueSystem {
   private selectedChoiceIndex = 0;
   private onChoiceConfirmed?: (choiceId: string) => void;
   private dismissTimer?: Phaser.Time.TimerEvent;
+  private messagePages: string[] = [];
+  private messagePageIndex = 0;
 
   public constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -78,15 +88,37 @@ export class DialogueSystem {
     this.panel.lineStyle(2, COLORS.MINT, 0.55);
     this.panel.strokeRoundedRect(panelX, panelY, PANEL_WIDTH, PANEL_HEIGHT, PANEL_RADIUS);
 
+    this.messageSpeaker = scene.add
+      .text(panelX + PANEL_PADDING_X, panelY + PANEL_PADDING_Y, '', {
+        color: '#ffd66b',
+        fontFamily: 'Noto Sans TC, PingFang TC, sans-serif',
+        fontSize: '15px',
+        fontStyle: 'bold',
+      })
+      .setScrollFactor(0)
+      .setDepth(DEPTH.DIALOGUE + 1);
+
     this.message = scene.add
-      .text(panelX + PANEL_PADDING_X, panelY + PANEL_HEIGHT / 2, '', {
+      .text(panelX + PANEL_PADDING_X, panelY + PANEL_PADDING_Y, '', {
         color: '#f8f5ff',
         fontFamily: 'Noto Sans TC, PingFang TC, sans-serif',
-        fontSize: '24px',
-        lineSpacing: 8,
-        wordWrap: { width: PANEL_WIDTH - PANEL_PADDING_X * 2 },
+        fontSize: `${MESSAGE_FONT_SIZE}px`,
+        lineSpacing: MESSAGE_LINE_SPACING,
+        wordWrap: {
+          width: PANEL_WIDTH - PANEL_PADDING_X * 2,
+          useAdvancedWrap: true,
+        },
       })
-      .setOrigin(0, 0.5)
+      .setScrollFactor(0)
+      .setDepth(DEPTH.DIALOGUE + 1);
+
+    this.messagePageHint = scene.add
+      .text(panelX + PANEL_WIDTH - PANEL_PADDING_X, panelY + PANEL_PADDING_Y, '', {
+        color: '#8f94bd',
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '12px',
+      })
+      .setOrigin(1, 0)
       .setScrollFactor(0)
       .setDepth(DEPTH.DIALOGUE + 1);
 
@@ -107,9 +139,9 @@ export class DialogueSystem {
       .text(choiceX + CHOICE_PANEL_PADDING, choiceY + 51, '', {
         color: '#f8f5ff',
         fontFamily: 'Noto Sans TC, PingFang TC, sans-serif',
-        fontSize: '22px',
+        fontSize: '19px',
         lineSpacing: 6,
-        wordWrap: { width: CHOICE_TEXT_WIDTH },
+        wordWrap: { width: CHOICE_TEXT_WIDTH, useAdvancedWrap: true },
       })
       .setScrollFactor(0)
       .setDepth(DEPTH.DIALOGUE + 2);
@@ -122,7 +154,8 @@ export class DialogueSystem {
           .text(choiceX + CHOICE_PANEL_PADDING + 20, rowY + CHOICE_ROW_HEIGHT / 2, '', {
             color: '#f8f5ff',
             fontFamily: 'Noto Sans TC, PingFang TC, sans-serif',
-            fontSize: '17px',
+            fontSize: '16px',
+            wordWrap: { width: CHOICE_TEXT_WIDTH - 40, useAdvancedWrap: true },
           })
           .setOrigin(0, 0.5)
           .setScrollFactor(0)
@@ -148,11 +181,18 @@ export class DialogueSystem {
   public show(text: string): void {
     this.closeChoices();
     this.dismissTimer?.remove(false);
-    this.message.setText(text);
+    const { speaker, body } = parseDialogueMessage(text);
+    this.messageSpeaker.setText(speaker ?? '');
+    this.message.setText(body);
+    this.messagePages = paginateDialogueLines(
+      this.message.getWrappedText(body),
+      MESSAGE_LINES_PER_PAGE,
+    );
+    this.messagePageIndex = 0;
+    this.positionMessageBody(Boolean(speaker));
+    this.showMessagePage();
     this.setMessageVisible(true);
-    this.dismissTimer = this.scene.time.delayedCall(MESSAGE_DURATION_MS, () => {
-      this.setMessageVisible(false);
-    });
+    this.scheduleMessagePage();
   }
 
   /** Opens two or three choices and transfers keyboard ownership to this system. */
@@ -202,6 +242,8 @@ export class DialogueSystem {
   /** Closes all dialogue surfaces without invoking a choice effect. */
   public close(): void {
     this.dismissTimer?.remove(false);
+    this.messagePages = [];
+    this.messagePageIndex = 0;
     this.setMessageVisible(false);
     this.closeChoices();
   }
@@ -210,7 +252,9 @@ export class DialogueSystem {
   public destroy(): void {
     this.close();
     this.panel.destroy();
+    this.messageSpeaker.destroy();
     this.message.destroy();
+    this.messagePageHint.destroy();
     this.choicePanel.destroy();
     this.choiceSpeaker.destroy();
     this.choicePrompt.destroy();
@@ -324,9 +368,46 @@ export class DialogueSystem {
     this.setChoicesVisible(false);
   }
 
+  /** Places body copy below a speaker label or vertically centers speakerless descriptions. */
+  private positionMessageBody(hasSpeaker: boolean): void {
+    const panelY = GAME_HEIGHT - PANEL_HEIGHT - PANEL_MARGIN_BOTTOM;
+    if (hasSpeaker) {
+      this.message.setY(
+        panelY + PANEL_PADDING_Y + 15 + SPEAKER_BODY_GAP,
+      );
+      return;
+    }
+    this.message.setY(panelY + PANEL_PADDING_Y);
+  }
+
+  /** Draws one complete page and a quiet counter when additional copy follows. */
+  private showMessagePage(): void {
+    this.message.setText(this.messagePages[this.messagePageIndex] ?? '');
+    this.messagePageHint.setText(
+      this.messagePages.length > 1
+        ? `${this.messagePageIndex + 1} / ${this.messagePages.length}`
+        : '',
+    );
+  }
+
+  /** Advances pages automatically, preserving the existing non-modal dialogue behavior. */
+  private scheduleMessagePage(): void {
+    this.dismissTimer = this.scene.time.delayedCall(MESSAGE_PAGE_DURATION_MS, () => {
+      if (this.messagePageIndex + 1 < this.messagePages.length) {
+        this.messagePageIndex += 1;
+        this.showMessagePage();
+        this.scheduleMessagePage();
+        return;
+      }
+      this.setMessageVisible(false);
+    });
+  }
+
   private setMessageVisible(visible: boolean): void {
     this.panel.setVisible(visible);
+    this.messageSpeaker.setVisible(visible && this.messageSpeaker.text.length > 0);
     this.message.setVisible(visible);
+    this.messagePageHint.setVisible(visible && this.messagePages.length > 1);
   }
 
   private setChoicesVisible(visible: boolean): void {

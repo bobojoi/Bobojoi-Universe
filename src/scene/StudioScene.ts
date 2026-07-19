@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { BubbleDog } from '../character/BubbleDog';
+import type { WorldPoint } from '../character/BubbleDogPositioning';
 import { BubbleGirl } from '../character/BubbleGirl';
 import { Player, type PlayerControls } from '../character/Player';
 import { GAME_WIDTH } from '../config/gameConfig';
@@ -39,6 +40,7 @@ import { HUD } from '../ui/HUD';
 
 const WORLD_WIDTH = 2200;
 const WORLD_HEIGHT = 1400;
+const WORLD_BOUNDS_MARGIN = 80;
 const PLAYER_START_X = 620;
 const PLAYER_START_Y = 760;
 const BUBBLE_GIRL_X = 960;
@@ -95,6 +97,7 @@ export class StudioScene extends Phaser.Scene {
   private hud!: HUD;
   private bubbleDog!: BubbleDog;
   private bubbleGirl!: BubbleGirl;
+  private bubbleDogBlockedPositions: WorldPoint[] = [];
   private starRing!: Phaser.GameObjects.Container;
   private autoSaveTimer!: Phaser.Time.TimerEvent;
   private ambientTimer?: Phaser.Time.TimerEvent;
@@ -153,6 +156,14 @@ export class StudioScene extends Phaser.Scene {
     const investigationTargets = this.createInvestigationTargets();
     const livingStudioTargets = this.createLivingStudioTargets();
     this.starRing = this.createStarRing();
+    this.bubbleDogBlockedPositions = [
+      this.bubbleGirl,
+      investigationTargets.propBox,
+      investigationTargets.bubbleTable,
+      investigationTargets.dogMat,
+      this.starRing,
+      ...livingStudioTargets.map(({ target }) => target),
+    ];
     this.ambientText = this.createAmbientText();
 
     this.dialogueSystem = new DialogueSystem(this);
@@ -228,7 +239,16 @@ export class StudioScene extends Phaser.Scene {
     }
 
     // Character life continues independently of player input and story progression.
-    this.bubbleDog.updateActivity(this.player);
+    this.bubbleDog.updateActivity(this.player, {
+      playerBusy:
+        this.guidanceController.isBlockingInput() || this.dialogueSystem.isActive(),
+      blockedPositions: this.bubbleDogBlockedPositions,
+      worldBounds: {
+        width: WORLD_WIDTH,
+        height: WORLD_HEIGHT,
+        margin: WORLD_BOUNDS_MARGIN,
+      },
+    });
     this.bubbleGirl.updateActivity(this.player);
 
     if (this.guidanceController.isBlockingInput()) {

@@ -5,14 +5,22 @@ import {
   type CharacterTextureVisual,
 } from '../constants/CharacterVisualConstants';
 import { BUBBLE_DOG_REACTIONS, pickNonRepeatingIndex } from '../studio/LivingStudioContent';
+import {
+  DOG_CATCH_UP_DISTANCE,
+  DOG_FOLLOW_MAX_DISTANCE,
+  DOG_FOLLOW_MIN_DISTANCE,
+  getBubbleDogCompanionTarget,
+  isBubbleDogBlocking,
+  type WorldBounds,
+  type WorldPoint,
+} from './BubbleDogPositioning';
 
 const RUN_DURATION_MS = 650;
 const DECISION_MIN_DELAY_MS = 2600;
 const DECISION_MAX_DELAY_MS = 5200;
-const FOLLOW_REFRESH_MS = 850;
-const FOLLOW_DISTANCE = 230;
-const FOLLOW_STOP_DISTANCE = 82;
-const WANDER_DISTANCE = 120;
+const FOLLOW_REFRESH_MS = 1100;
+const TARGET_REACHED_DISTANCE = 28;
+const WANDER_DISTANCE = 12;
 const WANDER_DURATION_MS = 1700;
 const FOLLOW_DURATION_MS = 900;
 const QUEST_SETTLE_DELAY_MS = 500;
@@ -22,6 +30,16 @@ const INTERACTION_SPIN_DEGREES = 18;
 const INTERACTION_SCALE_FACTOR = 1.12;
 const SITTING_SCALE_FACTOR = 0.96;
 const LYING_SCALE_FACTOR = 0.9;
+const IDLE_SCALE_FACTOR = 0.985;
+const IDLE_PULSE_DURATION_MS = 760;
+const MOVEMENT_THRESHOLD = 8;
+
+/** Scene-owned context supplies transient world constraints without entering dog state. */
+export interface BubbleDogActivityContext {
+  playerBusy: boolean;
+  blockedPositions: readonly WorldPoint[];
+  worldBounds: WorldBounds;
+}
 
 type BubbleDogActivity = '坐下' | '趴下' | '慢慢散步' | '看著你' | '發呆';
 
@@ -36,16 +54,16 @@ const AUTONOMOUS_ACTIVITIES: readonly BubbleDogActivity[] = [
 /** Represents 泡彈 and owns his small, non-persistent studio companion behavior. */
 export class BubbleDog extends Phaser.Physics.Arcade.Sprite {
   private hasRun = false;
-  private homeX: number;
-  private homeY: number;
   private nextDecisionAt = 0;
   private lastReactionIndex = -1;
+  private wasPlayerBusy = false;
+  private readonly lastPlayerHeading = new Phaser.Math.Vector2(0, 1);
+  private readonly preferredSide: -1 | 1 = -1;
+  private readonly companionTarget = new Phaser.Math.Vector2();
   private readonly activityLabel: Phaser.GameObjects.Text;
 
   public constructor(scene: Phaser.Scene, x: number, y: number) {
     super(scene, x, y, CHARACTER_VISUALS.BUBBLE_DOG.front.texture);
-    this.homeX = x;
-    this.homeY = y;
 
     scene.add.existing(this);
     scene.physics.add.existing(this, true);
@@ -64,22 +82,53 @@ export class BubbleDog extends Phaser.Physics.Arcade.Sprite {
       })
       .setOrigin(0.5)
       .setDepth(getWorldDepth(y) + 0.5);
+    this.startIdleAnimation();
     this.scheduleNextDecision();
   }
 
   /** Advances proximity following and autonomous activity without registering timers. */
-  public updateActivity(player: Phaser.GameObjects.Components.Transform): void {
+  public updateActivity(
+    player: Phaser.Physics.Arcade.Sprite,
+    context: BubbleDogActivityContext,
+  ): void {
     this.activityLabel.setPosition(this.x, this.y + LABEL_OFFSET_Y);
     this.setDepth(getWorldDepth(this.y));
     this.activityLabel.setDepth(getWorldDepth(this.y) + 0.5);
+    this.updatePlayerHeading(player);
+    if (context.playerBusy && !this.wasPlayerBusy) this.nextDecisionAt = 0;
+    this.wasPlayerBusy = context.playerBusy;
     if (this.scene.time.now < this.nextDecisionAt) return;
 
     const distance = Phaser.Math.Distance.Between(this.x, this.y, player.x, player.y);
-    if (distance <= FOLLOW_DISTANCE) {
-      this.followPlayer(player, distance);
+    this.companionTarget.setFromObject(
+      getBubbleDogCompanionTarget(
+        player,
+        this.lastPlayerHeading,
+        this.preferredSide,
+        context.blockedPositions,
+        context.worldBounds,
+      ),
+    );
+    const targetDistance = Phaser.Math.Distance.BetweenPoints(this, this.companionTarget);
+    const needsCatchUp = distance > DOG_CATCH_UP_DISTANCE;
+    const tooClose = distance < DOG_FOLLOW_MIN_DISTANCE;
+    const blocking = isBubbleDogBlocking(this, context.blockedPositions);
+    if (
+      needsCatchUp ||
+      tooClose ||
+      blocking ||
+      (context.playerBusy && targetDistance > TARGET_REACHED_DISTANCE)
+    ) {
+      this.followPlayer(targetDistance);
       return;
     }
-    this.performAutonomousActivity(player);
+
+    if (distance > DOG_FOLLOW_MAX_DISTANCE) {
+      this.startIdleAnimation('在附近等你');
+      this.nextDecisionAt = this.scene.time.now + FOLLOW_REFRESH_MS;
+      return;
+    }
+    this.performAutonomousActivity(player, context);
   }
 
   /** Plays one official-art greeting and returns non-repeating companion copy. */
@@ -98,6 +147,7 @@ export class BubbleDog extends Phaser.Physics.Arcade.Sprite {
       onComplete: () => {
         this.resetPose();
         this.refreshBody();
+        this.startIdleAnimation('開心地看著你');
       },
     });
     this.nextDecisionAt = this.scene.time.now + INTERACTION_DURATION_MS * 4;
@@ -110,21 +160,18 @@ export class BubbleDog extends Phaser.Physics.Arcade.Sprite {
     return BUBBLE_DOG_REACTIONS[this.lastReactionIndex] ?? BUBBLE_DOG_REACTIONS[0];
   }
 
-  /** Restores a quest-authoritative home without replaying the one-shot run event. */
+  /** Restores a quest-authoritative position without replaying the one-shot run event. */
   public restoreHome(x: number, y: number): void {
-    this.homeX = x;
-    this.homeY = y;
     this.setPosition(x, y);
     this.resetPose();
     this.refreshBody();
+    this.startIdleAnimation();
   }
 
-  /** Moves 泡彈 once for the quest and makes the destination his new roaming home. */
+  /** Moves 泡彈 once for the quest before companion positioning resumes. */
   public runTo(x: number, y: number): void {
     if (this.hasRun) return;
     this.hasRun = true;
-    this.homeX = x;
-    this.homeY = y;
     this.scene.tweens.killTweensOf(this);
     this.resetPose();
     this.faceTowards(x);
@@ -137,36 +184,33 @@ export class BubbleDog extends Phaser.Physics.Arcade.Sprite {
       y,
       duration: RUN_DURATION_MS,
       ease: 'Sine.out',
-      onComplete: () => this.refreshBody(),
+      onComplete: () => {
+        this.refreshBody();
+        this.startIdleAnimation('在一旁待機');
+      },
     });
   }
 
-  /** Approaches the player but stops short enough to keep both tokens readable. */
-  private followPlayer(
-    player: Phaser.GameObjects.Components.Transform,
-    distance: number,
-  ): void {
+  /** Moves toward the current side-rear anchor while keeping the hero unobstructed. */
+  private followPlayer(targetDistance: number): void {
     this.resetPose();
-    this.faceTowards(player.x);
-    if (distance <= FOLLOW_STOP_DISTANCE) {
-      this.activityLabel.setText('看著你');
+    if (targetDistance <= TARGET_REACHED_DISTANCE) {
+      this.startIdleAnimation('在你身後待機');
       this.nextDecisionAt = this.scene.time.now + FOLLOW_REFRESH_MS;
       return;
     }
 
-    const direction = new Phaser.Math.Vector2(player.x - this.x, player.y - this.y).normalize();
-    const travel = Math.max(0, distance - FOLLOW_STOP_DISTANCE);
-    this.activityLabel.setText('跑向你');
-    this.moveTo(
-      this.x + direction.x * travel,
-      this.y + direction.y * travel,
-      FOLLOW_DURATION_MS,
-    );
+    this.faceTowards(this.companionTarget.x);
+    this.activityLabel.setText('跟在側後方');
+    this.moveTo(this.companionTarget.x, this.companionTarget.y, FOLLOW_DURATION_MS);
     this.nextDecisionAt = this.scene.time.now + FOLLOW_REFRESH_MS;
   }
 
-  /** Chooses one small visual activity around the current quest-compatible home. */
-  private performAutonomousActivity(player: Phaser.GameObjects.Components.Transform): void {
+  /** Chooses one small visual activity around the safe side-rear companion area. */
+  private performAutonomousActivity(
+    player: Phaser.GameObjects.Components.Transform,
+    context: BubbleDogActivityContext,
+  ): void {
     const activity = Phaser.Utils.Array.GetRandom([...AUTONOMOUS_ACTIVITIES]);
     this.scene.tweens.killTweensOf(this);
     this.resetPose();
@@ -180,10 +224,21 @@ export class BubbleDog extends Phaser.Physics.Arcade.Sprite {
     }
     if (activity === '看著你') this.faceTowards(player.x);
     if (activity === '慢慢散步') {
-      const targetX = this.homeX + Phaser.Math.Between(-WANDER_DISTANCE, WANDER_DISTANCE);
-      const targetY = this.homeY + Phaser.Math.Between(-WANDER_DISTANCE, WANDER_DISTANCE);
+      const wanderTarget = getBubbleDogCompanionTarget(
+        player,
+        this.lastPlayerHeading,
+        this.preferredSide,
+        context.blockedPositions,
+        context.worldBounds,
+      );
+      const targetX = wanderTarget.x + Phaser.Math.Between(-WANDER_DISTANCE, WANDER_DISTANCE);
+      const targetY = wanderTarget.y + Phaser.Math.Between(-WANDER_DISTANCE, WANDER_DISTANCE);
       this.faceTowards(targetX);
       this.moveTo(targetX, targetY, WANDER_DURATION_MS);
+    }
+
+    if (activity !== '慢慢散步' && activity !== '坐下' && activity !== '趴下') {
+      this.startIdleAnimation(activity);
     }
 
     this.scheduleNextDecision();
@@ -198,7 +253,11 @@ export class BubbleDog extends Phaser.Physics.Arcade.Sprite {
       y,
       duration,
       ease: 'Sine.inOut',
-      onComplete: () => this.refreshBody(),
+      onComplete: () => {
+        this.resetPose();
+        this.refreshBody();
+        this.startIdleAnimation();
+      },
     });
   }
 
@@ -210,6 +269,35 @@ export class BubbleDog extends Phaser.Physics.Arcade.Sprite {
 
   /** Clears all temporary pose transforms while optionally preserving direction. */
   private resetPose(): void {
+    this.scene.tweens.killTweensOf(this);
+    this.setAngle(0).setFlipX(false);
+    this.applyVisual(CHARACTER_VISUALS.BUBBLE_DOG.front);
+  }
+
+  /** Uses player velocity as a stable facing memory so the dog does not swap sides every frame. */
+  private updatePlayerHeading(player: Phaser.Physics.Arcade.Sprite): void {
+    const body = player.body as Phaser.Physics.Arcade.Body;
+    if (body.velocity.length() < MOVEMENT_THRESHOLD) return;
+    this.lastPlayerHeading.copy(body.velocity).normalize();
+  }
+
+  /** Adds a subtle uniform idle pulse after every stop without distorting official artwork. */
+  private startIdleAnimation(label = '發呆'): void {
+    this.scene.tweens.killTweensOf(this);
+    this.resetPoseWithoutKillingTweens();
+    this.activityLabel.setText(label);
+    this.scene.tweens.add({
+      targets: this,
+      scale: CHARACTER_VISUALS.BUBBLE_DOG.scale * IDLE_SCALE_FACTOR,
+      duration: IDLE_PULSE_DURATION_MS,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.inOut',
+    });
+  }
+
+  /** Restores the front-facing frame when an idle tween has already been stopped. */
+  private resetPoseWithoutKillingTweens(): void {
     this.setAngle(0).setFlipX(false);
     this.applyVisual(CHARACTER_VISUALS.BUBBLE_DOG.front);
   }
