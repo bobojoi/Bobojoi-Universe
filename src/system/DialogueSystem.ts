@@ -194,6 +194,11 @@ export class DialogueSystem {
     return this.activeChoices.length > 0 && Boolean(this.onChoiceConfirmed);
   }
 
+  /** Reports either transient copy or modal choices so ambience can remain unobtrusive. */
+  public isActive(): boolean {
+    return this.message.visible || this.isChoosing();
+  }
+
   /** Closes all dialogue surfaces without invoking a choice effect. */
   public close(): void {
     this.dismissTimer?.remove(false);

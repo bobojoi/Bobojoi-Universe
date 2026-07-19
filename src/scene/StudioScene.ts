@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { BubbleDog } from '../character/BubbleDog';
 import { BubbleGirl } from '../character/BubbleGirl';
 import { Player, type PlayerControls } from '../character/Player';
+import { GAME_WIDTH } from '../config/gameConfig';
 import { COLORS, DEPTH, SCENE_KEYS } from '../constants/GameConstants';
 import {
   getProgressPresentation,
@@ -19,6 +20,12 @@ import {
   type StoryChoiceId,
   type StoryInteraction,
 } from '../story/MainStoryManager';
+import {
+  LIVING_STUDIO_PROPS,
+  STUDIO_AMBIENT_MESSAGES,
+  pickNonRepeatingIndex,
+  type LivingStudioProp,
+} from '../studio/LivingStudioContent';
 import { DialogueSystem } from '../system/DialogueSystem';
 import { InteractionSystem } from '../system/InteractionSystem';
 import { SaveSystem } from '../system/SaveSystem';
@@ -64,6 +71,13 @@ const PROP_LABEL_OFFSET_Y = 58;
 const STAR_RING_RADIUS = 28;
 const STAR_RING_PULSE_SCALE = 1.12;
 const STAR_RING_PULSE_DURATION_MS = 720;
+const LIVING_PROP_COLOR = COLORS.FLOOR_LINE;
+const AMBIENT_INITIAL_DELAY_MS = 9000;
+const AMBIENT_MIN_DELAY_MS = 15000;
+const AMBIENT_MAX_DELAY_MS = 26000;
+const AMBIENT_VISIBLE_DURATION_MS = 4200;
+const AMBIENT_FADE_DURATION_MS = 900;
+const AMBIENT_TEXT_Y = 600;
 
 /** First explorable room and composition root for gameplay systems. */
 export class StudioScene extends Phaser.Scene {
@@ -79,8 +93,12 @@ export class StudioScene extends Phaser.Scene {
   private storyManager!: MainStoryManager;
   private hud!: HUD;
   private bubbleDog!: BubbleDog;
+  private bubbleGirl!: BubbleGirl;
   private starRing!: Phaser.GameObjects.Container;
   private autoSaveTimer!: Phaser.Time.TimerEvent;
+  private ambientTimer?: Phaser.Time.TimerEvent;
+  private ambientText!: Phaser.GameObjects.Text;
+  private lastAmbientMessageIndex = -1;
   private guidanceController!: StudioGuidanceController;
   private tutorialProgress!: TutorialProgressState;
   private lastSaveSucceeded = true;
@@ -129,10 +147,12 @@ export class StudioScene extends Phaser.Scene {
       controls,
     );
 
-    const bubbleGirl = new BubbleGirl(this, BUBBLE_GIRL_X, BUBBLE_GIRL_Y);
+    this.bubbleGirl = new BubbleGirl(this, BUBBLE_GIRL_X, BUBBLE_GIRL_Y);
     this.bubbleDog = new BubbleDog(this, BUBBLE_DOG_X, BUBBLE_DOG_Y);
     const investigationTargets = this.createInvestigationTargets();
+    const livingStudioTargets = this.createLivingStudioTargets();
     this.starRing = this.createStarRing();
+    this.ambientText = this.createAmbientText();
 
     this.dialogueSystem = new DialogueSystem(this);
     this.hud = new HUD(this);
@@ -157,14 +177,14 @@ export class StudioScene extends Phaser.Scene {
     this.questWorldController.synchronizeFromState();
     this.interactionSystem = new InteractionSystem(this.player);
     this.interactionSystem.register({
-      target: bubbleGirl,
+      target: this.bubbleGirl,
       prompt: '和泡妞說話',
       onInteract: () => this.interactWithBubbleGirl(),
     });
     this.interactionSystem.register({
       target: this.bubbleDog,
-      prompt: '看看泡彈',
-      onInteract: () => this.dialogueSystem.show('泡彈看起來很開心。'),
+      prompt: '摸摸泡彈',
+      onInteract: () => this.dialogueSystem.show(this.bubbleDog.playInteraction()),
     });
     this.registerInvestigationTarget(investigationTargets.propBox, 'prop-box', '調查道具箱');
     this.registerInvestigationTarget(
@@ -179,6 +199,9 @@ export class StudioScene extends Phaser.Scene {
       isEnabled: () => this.questWorldController.isRingAvailable(),
       onInteract: () => this.handleQuestInteraction(this.questManager.collectRing()),
     });
+    for (const { definition, target } of livingStudioTargets) {
+      this.registerLivingStudioTarget(target, definition);
+    }
 
     this.configureCamera();
     this.autoSaveTimer = this.time.addEvent({
@@ -187,6 +210,7 @@ export class StudioScene extends Phaser.Scene {
       callback: this.saveProgress,
       callbackScope: this,
     });
+    this.scheduleAmbientMessage(AMBIENT_INITIAL_DELAY_MS);
 
     // The persisted flag is marked before display so reload/restart cannot replay onboarding.
     this.time.delayedCall(180, () => this.guidanceController.start());
@@ -201,6 +225,10 @@ export class StudioScene extends Phaser.Scene {
       this.scene.restart();
       return;
     }
+
+    // Character life continues independently of player input and story progression.
+    this.bubbleDog.updateActivity(this.player);
+    this.bubbleGirl.updateActivity(this.player);
 
     if (this.guidanceController.isBlockingInput()) {
       this.player.updateMovement(false);
@@ -232,6 +260,86 @@ export class StudioScene extends Phaser.Scene {
     if (interaction && Phaser.Input.Keyboard.JustDown(this.interactionKey)) {
       interaction.onInteract();
     }
+  }
+
+  /** Creates five optional room details without adding story or persistent state. */
+  private createLivingStudioTargets(): Array<{
+    definition: LivingStudioProp;
+    target: Phaser.GameObjects.Container;
+  }> {
+    return LIVING_STUDIO_PROPS.map((definition) => ({
+      definition,
+      target: this.createLabeledProp(
+        definition.x,
+        definition.y,
+        definition.label,
+        LIVING_PROP_COLOR,
+      ),
+    }));
+  }
+
+  /** Connects optional room dressing to the existing non-modal interaction path. */
+  private registerLivingStudioTarget(
+    target: Phaser.GameObjects.Container,
+    definition: LivingStudioProp,
+  ): void {
+    this.interactionSystem.register({
+      target,
+      prompt: definition.prompt,
+      onInteract: () => this.dialogueSystem.show(definition.description),
+    });
+  }
+
+  /** Builds one quiet fixed line for atmosphere that never takes input ownership. */
+  private createAmbientText(): Phaser.GameObjects.Text {
+    return this.add
+      .text(GAME_WIDTH / 2, AMBIENT_TEXT_Y, '', {
+        color: '#b8b9d9',
+        fontFamily: 'Noto Sans TC, PingFang TC, sans-serif',
+        fontSize: '15px',
+        fontStyle: 'italic',
+        backgroundColor: 'rgba(16, 19, 47, 0.72)',
+        padding: { x: 14, y: 8 },
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(DEPTH.UI)
+      .setVisible(false);
+  }
+
+  /** Schedules one ambient observation with a fresh interval after every attempt. */
+  private scheduleAmbientMessage(delay?: number): void {
+    this.ambientTimer?.remove(false);
+    this.ambientTimer = this.time.delayedCall(
+      delay ?? Phaser.Math.Between(AMBIENT_MIN_DELAY_MS, AMBIENT_MAX_DELAY_MS),
+      () => {
+        if (!this.guidanceController.isBlockingInput() && !this.dialogueSystem.isActive()) {
+          this.showAmbientMessage();
+        }
+        this.scheduleAmbientMessage();
+      },
+    );
+  }
+
+  /** Fades one non-repeating observation without touching dialogue or HUD state. */
+  private showAmbientMessage(): void {
+    this.lastAmbientMessageIndex = pickNonRepeatingIndex(
+      STUDIO_AMBIENT_MESSAGES.length,
+      this.lastAmbientMessageIndex,
+      Math.random(),
+    );
+    const message = STUDIO_AMBIENT_MESSAGES[this.lastAmbientMessageIndex];
+    if (!message) return;
+
+    this.tweens.killTweensOf(this.ambientText);
+    this.ambientText.setText(message).setAlpha(1).setVisible(true);
+    this.tweens.add({
+      targets: this.ambientText,
+      alpha: 0,
+      delay: AMBIENT_VISIBLE_DURATION_MS,
+      duration: AMBIENT_FADE_DURATION_MS,
+      onComplete: () => this.ambientText.setVisible(false),
+    });
   }
 
   /** Creates the three investigation props in the established studio visual language. */
@@ -510,6 +618,8 @@ export class StudioScene extends Phaser.Scene {
   private shutdown(): void {
     this.saveProgress();
     this.autoSaveTimer.remove(false);
+    this.ambientTimer?.remove(false);
+    this.tweens.killTweensOf(this.ambientText);
     this.dialogueSystem.destroy();
     this.guidanceController.destroy();
   }

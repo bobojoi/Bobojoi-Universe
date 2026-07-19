@@ -31,11 +31,10 @@ export class StudioQuestWorldController {
   /** Restores deterministic world and HUD state without replaying one-shot effects. */
   public synchronizeFromState(): void {
     const dogHasRun = this.quest.getState().investigated['dog-mat'];
-    this.world.bubbleDog.setPosition(
+    this.world.bubbleDog.restoreHome(
       dogHasRun ? DOG_RUN_X : DOG_REST_X,
       dogHasRun ? DOG_RUN_Y : DOG_REST_Y,
     );
-    this.world.bubbleDog.refreshBody();
     this.synchronizeRingAvailability();
     this.refreshHud();
   }
