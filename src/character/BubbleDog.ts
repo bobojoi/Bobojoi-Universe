@@ -1,5 +1,9 @@
 import Phaser from 'phaser';
-import { DEPTH, TEXTURE_KEYS } from '../constants/GameConstants';
+import {
+  CHARACTER_VISUALS,
+  getWorldDepth,
+  type CharacterTextureVisual,
+} from '../constants/CharacterVisualConstants';
 import { BUBBLE_DOG_REACTIONS, pickNonRepeatingIndex } from '../studio/LivingStudioContent';
 
 const RUN_DURATION_MS = 650;
@@ -12,10 +16,12 @@ const WANDER_DISTANCE = 120;
 const WANDER_DURATION_MS = 1700;
 const FOLLOW_DURATION_MS = 900;
 const QUEST_SETTLE_DELAY_MS = 500;
-const LABEL_OFFSET_Y = 54;
+const LABEL_OFFSET_Y = 18;
 const INTERACTION_DURATION_MS = 300;
 const INTERACTION_SPIN_DEGREES = 18;
-const INTERACTION_SCALE = 1.16;
+const INTERACTION_SCALE_FACTOR = 1.12;
+const SITTING_SCALE_FACTOR = 0.96;
+const LYING_SCALE_FACTOR = 0.9;
 
 type BubbleDogActivity = '坐下' | '趴下' | '慢慢散步' | '看著你' | '發呆';
 
@@ -37,13 +43,18 @@ export class BubbleDog extends Phaser.Physics.Arcade.Sprite {
   private readonly activityLabel: Phaser.GameObjects.Text;
 
   public constructor(scene: Phaser.Scene, x: number, y: number) {
-    super(scene, x, y, TEXTURE_KEYS.BUBBLE_DOG);
+    super(scene, x, y, CHARACTER_VISUALS.BUBBLE_DOG.front.texture);
     this.homeX = x;
     this.homeY = y;
 
     scene.add.existing(this);
     scene.physics.add.existing(this, true);
-    this.setDepth(DEPTH.CHARACTER);
+    this.setOrigin(
+      CHARACTER_VISUALS.BUBBLE_DOG.originX,
+      CHARACTER_VISUALS.BUBBLE_DOG.originY,
+    );
+    this.applyVisual(CHARACTER_VISUALS.BUBBLE_DOG.front);
+    this.setDepth(getWorldDepth(y));
     this.activityLabel = scene.add
       .text(x, y + LABEL_OFFSET_Y, '發呆', {
         color: '#ffd66b',
@@ -52,13 +63,15 @@ export class BubbleDog extends Phaser.Physics.Arcade.Sprite {
         fontStyle: 'bold',
       })
       .setOrigin(0.5)
-      .setDepth(DEPTH.CHARACTER + 1);
+      .setDepth(getWorldDepth(y) + 0.5);
     this.scheduleNextDecision();
   }
 
   /** Advances proximity following and autonomous activity without registering timers. */
   public updateActivity(player: Phaser.GameObjects.Components.Transform): void {
     this.activityLabel.setPosition(this.x, this.y + LABEL_OFFSET_Y);
+    this.setDepth(getWorldDepth(this.y));
+    this.activityLabel.setDepth(getWorldDepth(this.y) + 0.5);
     if (this.scene.time.now < this.nextDecisionAt) return;
 
     const distance = Phaser.Math.Distance.Between(this.x, this.y, player.x, player.y);
@@ -69,7 +82,7 @@ export class BubbleDog extends Phaser.Physics.Arcade.Sprite {
     this.performAutonomousActivity(player);
   }
 
-  /** Plays one placeholder greeting and returns non-repeating companion copy. */
+  /** Plays one official-art greeting and returns non-repeating companion copy. */
   public playInteraction(): string {
     this.scene.tweens.killTweensOf(this);
     this.resetPose();
@@ -77,7 +90,7 @@ export class BubbleDog extends Phaser.Physics.Arcade.Sprite {
     this.scene.tweens.add({
       targets: this,
       angle: INTERACTION_SPIN_DEGREES,
-      scale: INTERACTION_SCALE,
+      scale: CHARACTER_VISUALS.BUBBLE_DOG.scale * INTERACTION_SCALE_FACTOR,
       duration: INTERACTION_DURATION_MS,
       yoyo: true,
       repeat: 1,
@@ -114,6 +127,7 @@ export class BubbleDog extends Phaser.Physics.Arcade.Sprite {
     this.homeY = y;
     this.scene.tweens.killTweensOf(this);
     this.resetPose();
+    this.faceTowards(x);
     this.activityLabel.setText('跑到一旁');
     this.nextDecisionAt = this.scene.time.now + RUN_DURATION_MS + QUEST_SETTLE_DELAY_MS;
 
@@ -132,8 +146,8 @@ export class BubbleDog extends Phaser.Physics.Arcade.Sprite {
     player: Phaser.GameObjects.Components.Transform,
     distance: number,
   ): void {
+    this.resetPose();
     this.faceTowards(player.x);
-    this.resetPose(false);
     if (distance <= FOLLOW_STOP_DISTANCE) {
       this.activityLabel.setText('看著你');
       this.nextDecisionAt = this.scene.time.now + FOLLOW_REFRESH_MS;
@@ -158,8 +172,12 @@ export class BubbleDog extends Phaser.Physics.Arcade.Sprite {
     this.resetPose();
     this.activityLabel.setText(activity);
 
-    if (activity === '坐下') this.setScale(1, 0.84);
-    if (activity === '趴下') this.setScale(1.14, 0.62).setAngle(4);
+    if (activity === '坐下') {
+      this.setScale(CHARACTER_VISUALS.BUBBLE_DOG.scale * SITTING_SCALE_FACTOR);
+    }
+    if (activity === '趴下') {
+      this.setScale(CHARACTER_VISUALS.BUBBLE_DOG.scale * LYING_SCALE_FACTOR).setAngle(7);
+    }
     if (activity === '看著你') this.faceTowards(player.x);
     if (activity === '慢慢散步') {
       const targetX = this.homeX + Phaser.Math.Between(-WANDER_DISTANCE, WANDER_DISTANCE);
@@ -184,15 +202,25 @@ export class BubbleDog extends Phaser.Physics.Arcade.Sprite {
     });
   }
 
-  /** Keeps placeholder facing readable without introducing directional assets. */
+  /** Uses official side art and flips only that orientation for left/right travel. */
   private faceTowards(targetX: number): void {
-    this.setFlipX(targetX < this.x);
+    this.applyVisual(CHARACTER_VISUALS.BUBBLE_DOG.side);
+    this.setFlipX(targetX > this.x);
   }
 
   /** Clears all temporary pose transforms while optionally preserving direction. */
-  private resetPose(resetDirection = true): void {
-    this.setScale(1).setAngle(0);
-    if (resetDirection) this.setFlipX(false);
+  private resetPose(): void {
+    this.setAngle(0).setFlipX(false);
+    this.applyVisual(CHARACTER_VISUALS.BUBBLE_DOG.front);
+  }
+
+  /** Keeps both official orientations at one height with a feet-only static body. */
+  private applyVisual(visual: CharacterTextureVisual): void {
+    this.setTexture(visual.texture).setScale(CHARACTER_VISUALS.BUBBLE_DOG.scale);
+    const body = this.body as Phaser.Physics.Arcade.StaticBody;
+    body.setSize(visual.body.width, visual.body.height);
+    body.setOffset(visual.body.offsetX, visual.body.offsetY);
+    this.refreshBody();
   }
 
   /** Schedules the next poll using scene time so restart leaves no callbacks behind. */

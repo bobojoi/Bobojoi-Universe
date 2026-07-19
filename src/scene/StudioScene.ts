@@ -3,6 +3,7 @@ import { BubbleDog } from '../character/BubbleDog';
 import { BubbleGirl } from '../character/BubbleGirl';
 import { Player, type PlayerControls } from '../character/Player';
 import { GAME_WIDTH } from '../config/gameConfig';
+import { getWorldDepth } from '../constants/CharacterVisualConstants';
 import { COLORS, DEPTH, SCENE_KEYS } from '../constants/GameConstants';
 import {
   getProgressPresentation,
@@ -43,7 +44,7 @@ const PLAYER_START_Y = 760;
 const BUBBLE_GIRL_X = 960;
 const BUBBLE_GIRL_Y = 590;
 const BUBBLE_DOG_X = 520;
-const BUBBLE_DOG_Y = 460;
+const BUBBLE_DOG_Y = 570;
 const PROP_BOX_X = 720;
 const PROP_BOX_Y = 980;
 const BUBBLE_TABLE_X = 1260;
@@ -258,6 +259,7 @@ export class StudioScene extends Phaser.Scene {
     );
 
     if (interaction && Phaser.Input.Keyboard.JustDown(this.interactionKey)) {
+      this.player.playAction();
       interaction.onInteract();
     }
   }
@@ -368,7 +370,7 @@ export class StudioScene extends Phaser.Scene {
       .setOrigin(0.5);
     const dogMat = this.add
       .container(DOG_MAT_X, DOG_MAT_Y, [matShape, matLabel])
-      .setDepth(DEPTH.WORLD_DECORATION);
+      .setDepth(getWorldDepth(DOG_MAT_Y));
 
     return { propBox, bubbleTable, dogMat };
   }
@@ -402,7 +404,7 @@ export class StudioScene extends Phaser.Scene {
 
     return this.add
       .container(x, y, [shape, accent, labelText])
-      .setDepth(DEPTH.WORLD_DECORATION);
+      .setDepth(getWorldDepth(y));
   }
 
   /** Creates the quest pickup as the studio's single high-emphasis visual signature. */
@@ -422,7 +424,7 @@ export class StudioScene extends Phaser.Scene {
       .setOrigin(0.5);
     const container = this.add
       .container(STAR_RING_X, STAR_RING_Y, [glow, ring, star])
-      .setDepth(DEPTH.CHARACTER + 1);
+      .setDepth(getWorldDepth(STAR_RING_Y) + 0.5);
 
     this.tweens.add({
       targets: container,

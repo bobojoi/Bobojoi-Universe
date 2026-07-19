@@ -9,9 +9,9 @@ import type {
 } from './StudioQuestManager';
 
 const DOG_REST_X = 520;
-const DOG_REST_Y = 460;
+const DOG_REST_Y = 570;
 const DOG_RUN_X = 340;
-const DOG_RUN_Y = 350;
+const DOG_RUN_Y = 600;
 
 /** Small dependency bundle for applying quest effects to the studio world. */
 export interface StudioQuestWorldObjects {

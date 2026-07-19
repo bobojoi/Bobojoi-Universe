@@ -6,11 +6,14 @@ export const SCENE_KEYS = {
   STUDIO: 'StudioScene',
 } as const;
 
-/** Runtime texture keys for the first-version placeholder art. */
+/** Runtime texture keys for the official Bobojoi character art. */
 export const TEXTURE_KEYS = {
-  PLAYER: 'player-placeholder',
-  BUBBLE_GIRL: 'bubble-girl-placeholder',
-  BUBBLE_DOG: 'bubble-dog-placeholder',
+  PLAYER_STANDING: 'bubble-hero-standing',
+  PLAYER_ACTION: 'bubble-hero-action',
+  BUBBLE_GIRL_FRONT: 'bubble-girl-front',
+  BUBBLE_GIRL_SIDE: 'bubble-girl-side',
+  BUBBLE_DOG_FRONT: 'bubble-dog-front',
+  BUBBLE_DOG_SIDE: 'bubble-dog-side',
 } as const;
 
 /** Shared visual colors keep programmatic art consistent. */
